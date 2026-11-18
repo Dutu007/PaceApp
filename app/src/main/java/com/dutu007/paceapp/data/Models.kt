@@ -1,0 +1,58 @@
+package com.dutu007.paceapp.data
+
+data class UserProfile(
+    val username: String,
+    val displayName: String,
+)
+
+data class SessionItem(
+    val id: String,
+    val title: String,
+    val source: String,
+    val messageCount: Int,
+    val lastActive: Double?,
+    val preview: String?,
+    val pinned: Boolean,
+)
+
+data class ChatMessage(
+    val id: String,
+    val role: String,
+    val content: String,
+    val reasoning: String? = null,
+    val toolName: String? = null,
+    val timestamp: Double? = null,
+    val isStreaming: Boolean = false,
+)
+
+data class ToolActivity(
+    val name: String,
+    val status: String,
+    val preview: String? = null,
+)
+
+data class ApprovalRequest(
+    val runId: String,
+    val command: String,
+    val description: String,
+    val choices: List<String>,
+)
+
+data class AppRelease(
+    val versionCode: Int,
+    val versionName: String,
+    val notes: String,
+    val sha256: String,
+    val size: Long,
+)
+
+sealed interface ChatStreamEvent {
+    data class RunStarted(val runId: String?) : ChatStreamEvent
+    data class AssistantDelta(val messageId: String, val delta: String) : ChatStreamEvent
+    data class AssistantCommentary(val text: String) : ChatStreamEvent
+    data class ToolProgress(val eventType: String, val toolName: String, val preview: String?) : ChatStreamEvent
+    data class ApprovalNeeded(val request: ApprovalRequest) : ChatStreamEvent
+    data class AssistantCompleted(val sessionId: String, val messageId: String, val content: String) : ChatStreamEvent
+    data class Error(val message: String) : ChatStreamEvent
+    data object Done : ChatStreamEvent
+}

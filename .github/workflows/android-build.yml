@@ -1,0 +1,122 @@
+name: Build Android app
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/android-build.yml"
+      - "app/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - "settings.gradle.kts"
+      - "local.properties.example"
+  pull_request:
+    paths:
+      - ".github/workflows/android-build.yml"
+      - "app/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - "settings.gradle.kts"
+
+permissions:
+  contents: read
+
+env:
+  KEYSTORE_PRESENT: ${{ secrets.PACEAPP_KEYSTORE_BASE64 != '' }}
+  SERVER_DEPLOY_ENABLED: ${{ secrets.SERVER_SSH_KEY != '' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Configure API client
+        run: |
+          cat > local.properties <<EOF
+          api.baseUrl=https://pace.zengdeming.cn
+          EOF
+
+      - name: Check and assemble debug APK
+        run: gradle testDebugUnitTest lintDebug assembleDebug
+
+      - name: Upload installable debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PaceApp-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Restore release keystore
+        if: env.KEYSTORE_PRESENT == 'true'
+        env:
+          PACEAPP_KEYSTORE_BASE64: ${{ secrets.PACEAPP_KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p keystore
+          echo "$PACEAPP_KEYSTORE_BASE64" | base64 -d > keystore/paceapp-release.jks
+
+      - name: Assemble release APK
+        if: env.KEYSTORE_PRESENT == 'true'
+        env:
+          PACEAPP_STORE_FILE: keystore/paceapp-release.jks
+          PACEAPP_STORE_PASSWORD: ${{ secrets.PACEAPP_STORE_PASSWORD }}
+          PACEAPP_KEY_ALIAS: ${{ secrets.PACEAPP_KEY_ALIAS }}
+          PACEAPP_KEY_PASSWORD: ${{ secrets.PACEAPP_KEY_PASSWORD }}
+        run: gradle assembleRelease -Papp.versionCode=${{ github.run_number }} -Papp.versionName=1.0.${{ github.run_number }}
+
+      - name: Upload signed release APK
+        if: env.KEYSTORE_PRESENT == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PaceApp-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish release to server
+        if: env.KEYSTORE_PRESENT == 'true' && env.SERVER_DEPLOY_ENABLED == 'true'
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          APP_DIR: /home/dutu/workspace/pace-app
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          APK=app/build/outputs/apk/release/app-release.apk
+          jq -n --argjson vc "$VERSION_CODE" --arg vn "$VERSION_NAME" \
+                --arg notes "$(git log -1 --pretty=%s)" \
+                --arg sha "$(sha256sum "$APK" | cut -d' ' -f1)" \
+                --argjson size "$(stat -c%s "$APK")" \
+                '{version_code:$vc, version_name:$vn, notes:$notes, sha256:$sha, size:$size}' > latest.json
+          SSH_OPTS="-i $HOME/.ssh/deploy_key -o StrictHostKeyChecking=accept-new"
+          TARGET="$SERVER_USER@$SERVER_HOST"
+          ssh $SSH_OPTS "$TARGET" "mkdir -p $APP_DIR/apks"
+          scp $SSH_OPTS "$APK" "$TARGET:$APP_DIR/apks/paceapp.apk.tmp"
+          scp $SSH_OPTS latest.json "$TARGET:$APP_DIR/apks/latest.json.tmp"
+          ssh $SSH_OPTS "$TARGET" "cd $APP_DIR/apks && mv paceapp.apk.tmp paceapp.apk && mv latest.json.tmp latest.json && chmod 644 paceapp.apk latest.json && ls -l"
