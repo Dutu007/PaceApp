@@ -49,6 +49,7 @@ data class PaceUiState(
     val toolActivities: List<ToolActivity> = emptyList(),
     val pendingApproval: ApprovalRequest? = null,
     val notice: PaceNotice? = null,
+    val checkingUpdate: Boolean = false,
     val updateAvailable: AppRelease? = null,
     val updateDownloading: Boolean = false,
     val updateProgress: Int = 0,
@@ -404,14 +405,17 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkForUpdate(manual: Boolean = false) {
         viewModelScope.launch {
+            if (manual) _uiState.update { it.copy(checkingUpdate = true) }
             try {
                 val release = repository.latestRelease()
                 if (release.versionCode > BuildConfig.VERSION_CODE) {
-                    _uiState.update { it.copy(updateAvailable = release) }
-                } else if (manual) {
-                    showNotice("已是最新版本 $currentVersionName")
+                    _uiState.update { it.copy(checkingUpdate = false, updateAvailable = release) }
+                } else {
+                    _uiState.update { it.copy(checkingUpdate = false) }
+                    if (manual) showNotice("已是最新版本 $currentVersionName")
                 }
             } catch (e: Exception) {
+                _uiState.update { it.copy(checkingUpdate = false) }
                 if (handleAuthError(e)) return@launch
                 if (manual) {
                     val msg = if (e is ApiException && e.statusCode == 404) {
