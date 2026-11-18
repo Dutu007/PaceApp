@@ -21,6 +21,9 @@ services:
       AUTH_SIGNING_SECRET: ${AUTH_SIGNING_SECRET:?AUTH_SIGNING_SECRET is required}
       HERMES_BASE_URL: ${HERMES_BASE_URL:-http://host.docker.internal:8642}
       HERMES_API_KEY: ${HERMES_API_KEY:?HERMES_API_KEY is required}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      STT_REFINE_MODEL: ${STT_REFINE_MODEL:-deepseek-chat}
       TOKEN_TTL_DAYS: ${TOKEN_TTL_DAYS:-90}
       ASSISTANT_DATA_DIR: /data/assistant
       HERMES_MEMORY_FILE: /data/hermes/MEMORY.md

@@ -9,19 +9,25 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -34,8 +40,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -62,6 +66,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -212,26 +217,10 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
                 },
                 bottomBar = {
                     if (!imeVisible) {
-                        NavigationBar(containerColor = PacePalette.Card) {
-                            NavigationBarItem(
-                                selected = state.currentTab == PaceTab.CHAT,
-                                onClick = { viewModel.selectTab(PaceTab.CHAT) },
-                                icon = { Icon(ChatTabIcon, contentDescription = "对话") },
-                                label = { Text("对话") },
-                            )
-                            NavigationBarItem(
-                                selected = state.currentTab == PaceTab.ENTRIES,
-                                onClick = { viewModel.selectTab(PaceTab.ENTRIES) },
-                                icon = { Icon(EntriesTabIcon, contentDescription = "记录") },
-                                label = { Text("记录") },
-                            )
-                            NavigationBarItem(
-                                selected = state.currentTab == PaceTab.DOCS,
-                                onClick = { viewModel.selectTab(PaceTab.DOCS) },
-                                icon = { Icon(DocsTabIcon, contentDescription = "文档") },
-                                label = { Text("文档") },
-                            )
-                        }
+                        PaceBottomBar(
+                            currentTab = state.currentTab,
+                            onSelectTab = viewModel::selectTab,
+                        )
                     }
                 },
             ) { padding ->
@@ -340,6 +329,62 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
                 TextButton(onClick = viewModel::dismissUpdate) { Text("稍后") }
             },
         )
+    }
+}
+
+@Composable
+private fun PaceBottomBar(
+    currentTab: PaceTab,
+    onSelectTab: (PaceTab) -> Unit,
+) {
+    Surface(
+        color = PacePalette.Card,
+        border = BorderStroke(1.dp, PacePalette.CardBorder),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .height(52.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val tabs = listOf(
+                Triple(PaceTab.CHAT, "对话", ChatTabIcon),
+                Triple(PaceTab.ENTRIES, "记录", EntriesTabIcon),
+                Triple(PaceTab.DOCS, "文档", DocsTabIcon),
+            )
+            tabs.forEach { (tab, label, icon) ->
+                val selected = currentTab == tab
+                val tint = if (selected) PacePalette.Primary else PacePalette.TextSecondary
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onSelectTab(tab) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = label,
+                        tint = tint,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = label,
+                        fontSize = 11.sp,
+                        lineHeight = 12.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = tint,
+                    )
+                }
+            }
+        }
     }
 }
 

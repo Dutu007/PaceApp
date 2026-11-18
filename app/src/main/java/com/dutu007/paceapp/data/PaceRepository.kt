@@ -175,6 +175,19 @@ private data class AppReleaseDto(
 @Serializable
 private data class ApprovalSubmitDto(val choice: String)
 
+@Serializable
+private data class SttRefineRequestDto(
+    val text: String,
+    val candidates: List<String> = emptyList(),
+    val context: String = "",
+)
+
+@Serializable
+private data class SttRefineResponseDto(
+    val text: String = "",
+    val refined: Boolean = false,
+)
+
 class PaceRepository(context: Context) {
     private val preferences = context.getSharedPreferences("paceapp_session", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
@@ -344,6 +357,14 @@ class PaceRepository(context: Context) {
 
     suspend fun stopRun(runId: String) {
         client.post("$baseUrl/api/v1/runs/$runId/stop") { auth() }.check()
+    }
+
+    suspend fun refineSpeech(text: String, candidates: List<String>, currentDraft: String): String {
+        val resp = client.post("$baseUrl/api/v1/stt/refine") {
+            auth()
+            jsonBody(SttRefineRequestDto(text = text, candidates = candidates, context = currentDraft))
+        }.bodyChecked<SttRefineResponseDto>()
+        return resp.text.ifBlank { text }
     }
 
     suspend fun listEntries(kind: String? = null, query: String? = null): List<EntryItem> {

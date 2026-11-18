@@ -1,8 +1,15 @@
 package com.dutu007.paceapp
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +37,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -49,10 +57,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.dutu007.paceapp.data.ApprovalRequest
 import com.dutu007.paceapp.data.ChatMessage
 import com.dutu007.paceapp.data.SessionItem
@@ -172,98 +185,11 @@ fun ChatScreen(
             }
         }
 
-        // Sleek RikkaHub-style floating pill composer
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (state.toolActivities.isNotEmpty() && state.streaming) {
-                val latestTool = state.toolActivities.last()
-                Surface(
-                    color = PacePalette.PrimarySoft,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = "⚙ ${latestTool.name}：${latestTool.preview ?: latestTool.status}",
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = PacePalette.Primary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
-                }
-            }
-
-            Surface(
-                color = PacePalette.Card,
-                border = BorderStroke(1.dp, PacePalette.CardBorder),
-                shape = RoundedCornerShape(26.dp),
-                tonalElevation = 1.dp,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier.padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 38.dp, max = 120.dp)
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        if (state.draft.isEmpty()) {
-                            Text(
-                                "给 Hermes 发消息...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = PacePalette.TextSecondary.copy(alpha = 0.7f),
-                            )
-                        }
-                        BasicTextField(
-                            value = state.draft,
-                            onValueChange = viewModel::setDraft,
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = PacePalette.TextPrimary),
-                            cursorBrush = SolidColor(PacePalette.Primary),
-                            maxLines = 5,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    Spacer(Modifier.width(6.dp))
-                    if (state.streaming) {
-                        Surface(
-                            onClick = viewModel::stopActiveRun,
-                            color = PacePalette.Muted,
-                            shape = CircleShape,
-                            modifier = Modifier.size(38.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text("■", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    } else {
-                        val canSend = state.draft.isNotBlank()
-                        Surface(
-                            onClick = { if (canSend) viewModel.sendMessage() },
-                            color = if (canSend) PacePalette.Primary else PacePalette.Muted,
-                            shape = CircleShape,
-                            modifier = Modifier.size(38.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    "↑",
-                                    color = if (canSend) Color.White else PacePalette.TextSecondary,
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Sleek Doubao-style composer: tap to type, long-press mic (left of send) for refined voice input
+        DoubaoComposer(
+            state = state,
+            viewModel = viewModel,
+        )
     }
 
     if (showSessionSheet) {
@@ -387,6 +313,262 @@ fun ChatScreen(
                 TextButton(onClick = { sessionToManage = null }) { Text("取消") }
             },
         )
+    }
+}
+
+@Composable
+private fun DoubaoComposer(
+    state: PaceUiState,
+    viewModel: PaceViewModel,
+) {
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    val cancelThresholdPx = with(LocalDensity.current) { 56.dp.toPx() }
+
+    var voiceListening by remember { mutableStateOf(false) }
+    var voiceCancelling by remember { mutableStateOf(false) }
+    var voicePartial by remember { mutableStateOf("") }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            viewModel.notifyHint("已授权麦克风，长按右侧麦克风即可语音输入")
+        } else {
+            viewModel.notifyHint("需要麦克风权限才能使用语音输入", isError = true)
+        }
+    }
+
+    val voiceController = rememberVoiceInputController(
+        context = context,
+        onPartial = { voicePartial = it },
+        onResult = { candidates ->
+            voiceListening = false
+            voicePartial = ""
+            viewModel.finalizeVoiceInput(candidates)
+        },
+        onError = { msg ->
+            voiceListening = false
+            voicePartial = ""
+            viewModel.notifyHint(msg, isError = true)
+        },
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (voiceListening || state.voiceRefining) {
+            val bg = when {
+                voiceCancelling -> MaterialTheme.colorScheme.errorContainer
+                state.voiceRefining -> PacePalette.PrimarySoft
+                else -> PacePalette.Primary
+            }
+            val fg = when {
+                voiceCancelling -> MaterialTheme.colorScheme.onErrorContainer
+                state.voiceRefining -> PacePalette.Primary
+                else -> Color.White
+            }
+            Surface(
+                color = bg,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = when {
+                            voiceCancelling -> "松开手指取消输入"
+                            state.voiceRefining -> "正在优化语音识别与标点..."
+                            else -> "正在聆听 · 上滑取消 · 松手填入输入框"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = fg,
+                    )
+                    if (voicePartial.isNotBlank() && !voiceCancelling) {
+                        Text(
+                            text = voicePartial,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = fg.copy(alpha = 0.92f),
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        } else if (state.toolActivities.isNotEmpty() && state.streaming) {
+            val latestTool = state.toolActivities.last()
+            Surface(
+                color = PacePalette.PrimarySoft,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = "⚙ ${latestTool.name}：${latestTool.preview ?: latestTool.status}",
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = PacePalette.Primary,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+        }
+
+        Surface(
+            color = PacePalette.Card,
+            border = BorderStroke(
+                width = 1.dp,
+                color = if (voiceListening) PacePalette.Primary else PacePalette.CardBorder,
+            ),
+            shape = RoundedCornerShape(26.dp),
+            tonalElevation = 1.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 16.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 38.dp, max = 120.dp)
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (state.draft.isEmpty()) {
+                        Text(
+                            "发消息或长按右侧说话...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = PacePalette.TextSecondary.copy(alpha = 0.7f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    BasicTextField(
+                        value = state.draft,
+                        onValueChange = viewModel::setDraft,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = PacePalette.TextPrimary),
+                        cursorBrush = SolidColor(PacePalette.Primary),
+                        maxLines = 5,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                // Always-present Mic button immediately left of Send/Stop (Doubao style)
+                Surface(
+                    color = when {
+                        voiceCancelling -> MaterialTheme.colorScheme.errorContainer
+                        voiceListening -> PacePalette.Primary
+                        else -> PacePalette.Muted
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val quickRelease = withTimeoutOrNull(160L) {
+                                    waitForUpOrCancellation()
+                                }
+                                if (quickRelease != null) {
+                                    viewModel.notifyHint("长按麦克风说话，松手转写到输入框")
+                                    return@awaitEachGesture
+                                }
+
+                                val granted = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO,
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (!granted) {
+                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    waitForUpOrCancellation()
+                                    return@awaitEachGesture
+                                }
+
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                voicePartial = ""
+                                voiceCancelling = false
+                                val started = voiceController.start()
+                                if (!started) {
+                                    waitForUpOrCancellation()
+                                    return@awaitEachGesture
+                                }
+                                voiceListening = true
+
+                                val startY = down.position.y
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
+                                    if (change == null || !change.pressed) {
+                                        break
+                                    }
+                                    voiceCancelling = (startY - change.position.y) > cancelThresholdPx
+                                }
+
+                                val shouldCancel = voiceCancelling
+                                voiceCancelling = false
+                                voiceListening = false
+                                voiceController.finish(cancel = shouldCancel)
+                                if (shouldCancel) {
+                                    voicePartial = ""
+                                }
+                            }
+                        },
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = MicIcon,
+                            contentDescription = "长按语音输入",
+                            tint = when {
+                                voiceCancelling -> MaterialTheme.colorScheme.error
+                                voiceListening -> Color.White
+                                else -> PacePalette.Primary
+                            },
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(6.dp))
+
+                if (state.streaming) {
+                    Surface(
+                        onClick = viewModel::stopActiveRun,
+                        color = PacePalette.Muted,
+                        shape = CircleShape,
+                        modifier = Modifier.size(38.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("■", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                } else {
+                    val canSend = state.draft.isNotBlank() && !state.voiceRefining
+                    Surface(
+                        onClick = { if (canSend) viewModel.sendMessage() },
+                        color = if (canSend) PacePalette.Primary else PacePalette.Muted,
+                        shape = CircleShape,
+                        modifier = Modifier.size(38.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                "↑",
+                                color = if (canSend) Color.White else PacePalette.TextSecondary,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

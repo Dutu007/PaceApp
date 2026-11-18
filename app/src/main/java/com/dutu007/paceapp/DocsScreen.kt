@@ -280,9 +280,7 @@ fun DocDetailOverlay(
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = PacePalette.Card),
                     navigationIcon = {
-                        TextButton(onClick = onBack) {
-                            Text("‹ 返回", fontSize = 16.sp, color = PacePalette.Primary)
-                        }
+                        AppBackButton(onClick = onBack)
                     },
                     title = {
                         Text(doc.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)

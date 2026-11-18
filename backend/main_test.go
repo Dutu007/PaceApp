@@ -256,3 +256,41 @@ func TestEntriesAndDocSync(t *testing.T) {
 		t.Fatalf("expected 400 for path traversal, got %d", badDocResp.StatusCode)
 	}
 }
+
+func TestSttRefine(t *testing.T) {
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"帮我让 Hermes 把今天的跑步记录整理一下。"}}]}`))
+	}))
+	defer llm.Close()
+
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	srv.llm = newLLMClient(llm.URL, "test-deepseek-key", "deepseek-chat")
+	token, _, _ := srv.auth.issueToken(time.Now())
+
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+
+	req, _ := http.NewRequest(
+		http.MethodPost,
+		api.URL+"/api/v1/stt/refine",
+		strings.NewReader(`{"text":"帮我让河马斯把今天的跑步记录整理一下","candidates":["帮我让河马斯把今天的跑步记录整理一下"]}`),
+	)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out refineSttResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.Refined || !strings.Contains(out.Text, "Hermes") {
+		t.Fatalf("unexpected stt refine output: %+v", out)
+	}
+}

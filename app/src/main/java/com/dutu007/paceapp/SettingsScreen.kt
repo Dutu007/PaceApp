@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -91,6 +92,68 @@ val RefreshIcon = ImageVector.Builder(
     }
 }.build()
 
+val BackIcon = ImageVector.Builder(
+    name = "BackChevron",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+    autoMirror = true,
+).apply {
+    path(
+        fill = null,
+        stroke = SolidColor(Color.Black),
+        strokeLineWidth = 2f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ) {
+        moveTo(15f, 18f)
+        lineTo(9f, 12f)
+        lineTo(15f, 6f)
+    }
+}.build()
+
+val MicIcon = ImageVector.Builder(
+    name = "Mic",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(
+        fill = null,
+        stroke = SolidColor(Color.Black),
+        strokeLineWidth = 1.9f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ) {
+        moveTo(12f, 3f)
+        curveTo(10.34f, 3f, 9f, 4.34f, 9f, 6f)
+        lineTo(9f, 11f)
+        curveTo(9f, 12.66f, 10.34f, 14f, 12f, 14f)
+        curveTo(13.66f, 14f, 15f, 12.66f, 15f, 11f)
+        lineTo(15f, 6f)
+        curveTo(15f, 4.34f, 13.66f, 3f, 12f, 3f)
+        close()
+        moveTo(5.5f, 11f)
+        curveTo(5.5f, 14.59f, 8.41f, 17.5f, 12f, 17.5f)
+        curveTo(15.59f, 17.5f, 18.5f, 14.59f, 18.5f, 11f)
+        moveTo(12f, 17.5f); lineTo(12f, 21f)
+        moveTo(9f, 21f); lineTo(15f, 21f)
+    }
+}.build()
+
+@Composable
+fun AppBackButton(onClick: () -> Unit, enabled: Boolean = true) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.primary),
+    ) {
+        Icon(BackIcon, contentDescription = "返回")
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -117,9 +180,7 @@ fun SettingsScreen(
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
                     navigationIcon = {
-                        TextButton(onClick = onBack) {
-                            Text("‹ 返回", fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
-                        }
+                        AppBackButton(onClick = onBack)
                     },
                     title = {
                         Text("设置", fontWeight = FontWeight.Bold)

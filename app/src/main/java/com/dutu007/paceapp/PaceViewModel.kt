@@ -58,6 +58,7 @@ data class PaceUiState(
     val activeRunId: String? = null,
     val toolActivities: List<ToolActivity> = emptyList(),
     val pendingApproval: ApprovalRequest? = null,
+    val voiceRefining: Boolean = false,
 
     // Entries / Quick capture state
     val entries: List<EntryItem> = emptyList(),
@@ -116,6 +117,25 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     fun setUsername(value: String) = _uiState.update { it.copy(usernameInput = value) }
     fun setPassword(value: String) = _uiState.update { it.copy(passwordInput = value) }
     fun setDraft(value: String) = _uiState.update { it.copy(draft = value) }
+
+    fun notifyHint(text: String, isError: Boolean = false) = showNotice(text, isError = isError)
+
+    fun finalizeVoiceInput(candidates: List<String>) {
+        val primary = candidates.firstOrNull()?.trim().orEmpty()
+        if (primary.isEmpty()) return
+        val existingDraft = _uiState.value.draft
+        viewModelScope.launch {
+            _uiState.update { it.copy(voiceRefining = true) }
+            val refined = runCatching {
+                repository.refineSpeech(primary, candidates, existingDraft)
+            }.getOrDefault(primary).trim()
+            _uiState.update { s ->
+                val prefix = s.draft.trimEnd()
+                val nextDraft = if (prefix.isEmpty()) refined else "$prefix $refined"
+                s.copy(voiceRefining = false, draft = nextDraft)
+            }
+        }
+    }
     fun setCaptureText(value: String) = _uiState.update { it.copy(captureText = value) }
     fun setCaptureKind(value: String) = _uiState.update { it.copy(captureKind = value) }
     fun setCaptureTags(value: String) = _uiState.update { it.copy(captureTags = value) }
