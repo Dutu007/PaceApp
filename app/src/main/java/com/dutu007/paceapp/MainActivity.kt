@@ -14,11 +14,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -57,6 +60,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -109,12 +113,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
+    var showSessionSheet by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
 
     val notice = state.notice
     LaunchedEffect(notice?.id) {
@@ -145,45 +151,58 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
             )
         }
         else -> {
+            val activeSession = state.sessions.firstOrNull { it.id == state.activeSessionId }
             Scaffold(
                 containerColor = PacePalette.Background,
                 topBar = {
                     TopAppBar(
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = PacePalette.Card),
                         title = {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                val titleText = when (state.currentTab) {
-                                    PaceTab.CHAT -> "Hermes"
-                                    PaceTab.ENTRIES -> "记录与看板"
-                                    PaceTab.DOCS -> "服务器文档"
-                                }
-                                Text(titleText, fontWeight = FontWeight.Bold)
-                                val (dotColor, statusText) = when (state.hermesOnline) {
-                                    true -> PacePalette.Success to "在线"
-                                    false -> MaterialTheme.colorScheme.error to "离线"
-                                    null -> Color(0xFF9AA0A6) to "连接中"
-                                }
-                                Surface(
-                                    color = dotColor.copy(alpha = 0.12f),
-                                    shape = RoundedCornerShape(99.dp),
+                            val dotColor = when (state.hermesOnline) {
+                                true -> PacePalette.Success
+                                false -> MaterialTheme.colorScheme.error
+                                null -> Color(0xFF9AA0A6)
+                            }
+                            if (state.currentTab == PaceTab.CHAT) {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { showSessionSheet = true }
+                                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    ) {
-                                        Box(Modifier.size(7.dp).clip(CircleShape).background(dotColor))
-                                        Text(statusText, style = MaterialTheme.typography.labelSmall, color = dotColor)
-                                    }
+                                    Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
+                                    Text(
+                                        text = "${activeSession?.title ?: "新对话"} ▾",
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                }
+                            } else {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        text = if (state.currentTab == PaceTab.ENTRIES) "记录与看板" else "文档空间",
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
                                 }
                             }
                         },
                         actions = {
-                            IconButton(onClick = viewModel::refreshAll, enabled = !state.streaming) {
-                                Icon(RefreshIcon, contentDescription = "刷新", tint = PacePalette.Primary)
+                            if (state.currentTab == PaceTab.CHAT) {
+                                TextButton(onClick = viewModel::startNewSession, enabled = !state.streaming) {
+                                    Text("+ 新建", color = PacePalette.Primary)
+                                }
+                            } else {
+                                IconButton(onClick = viewModel::refreshAll, enabled = !state.streaming) {
+                                    Icon(RefreshIcon, contentDescription = "刷新", tint = PacePalette.Primary)
+                                }
                             }
                             IconButton(onClick = { showSettings = true }) {
                                 Icon(SettingsIcon, contentDescription = "设置", tint = PacePalette.Primary)
@@ -192,25 +211,27 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
                     )
                 },
                 bottomBar = {
-                    NavigationBar(containerColor = PacePalette.Card) {
-                        NavigationBarItem(
-                            selected = state.currentTab == PaceTab.CHAT,
-                            onClick = { viewModel.selectTab(PaceTab.CHAT) },
-                            icon = { Icon(ChatTabIcon, contentDescription = "对话") },
-                            label = { Text("对话") },
-                        )
-                        NavigationBarItem(
-                            selected = state.currentTab == PaceTab.ENTRIES,
-                            onClick = { viewModel.selectTab(PaceTab.ENTRIES) },
-                            icon = { Icon(EntriesTabIcon, contentDescription = "记录") },
-                            label = { Text("记录") },
-                        )
-                        NavigationBarItem(
-                            selected = state.currentTab == PaceTab.DOCS,
-                            onClick = { viewModel.selectTab(PaceTab.DOCS) },
-                            icon = { Icon(DocsTabIcon, contentDescription = "文档") },
-                            label = { Text("文档") },
-                        )
+                    if (!imeVisible) {
+                        NavigationBar(containerColor = PacePalette.Card) {
+                            NavigationBarItem(
+                                selected = state.currentTab == PaceTab.CHAT,
+                                onClick = { viewModel.selectTab(PaceTab.CHAT) },
+                                icon = { Icon(ChatTabIcon, contentDescription = "对话") },
+                                label = { Text("对话") },
+                            )
+                            NavigationBarItem(
+                                selected = state.currentTab == PaceTab.ENTRIES,
+                                onClick = { viewModel.selectTab(PaceTab.ENTRIES) },
+                                icon = { Icon(EntriesTabIcon, contentDescription = "记录") },
+                                label = { Text("记录") },
+                            )
+                            NavigationBarItem(
+                                selected = state.currentTab == PaceTab.DOCS,
+                                onClick = { viewModel.selectTab(PaceTab.DOCS) },
+                                icon = { Icon(DocsTabIcon, contentDescription = "文档") },
+                                label = { Text("文档") },
+                            )
+                        }
                     }
                 },
             ) { padding ->
@@ -236,7 +257,12 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
                     }
 
                     when (state.currentTab) {
-                        PaceTab.CHAT -> ChatScreen(state = state, viewModel = viewModel)
+                        PaceTab.CHAT -> ChatScreen(
+                            state = state,
+                            viewModel = viewModel,
+                            showSessionSheet = showSessionSheet,
+                            onDismissSessionSheet = { showSessionSheet = false },
+                        )
                         PaceTab.ENTRIES -> EntriesScreen(state = state, viewModel = viewModel)
                         PaceTab.DOCS -> DocsScreen(state = state, viewModel = viewModel)
                     }

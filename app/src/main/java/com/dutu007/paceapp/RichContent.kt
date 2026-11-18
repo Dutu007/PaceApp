@@ -1,19 +1,24 @@
 package com.dutu007.paceapp
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
@@ -26,11 +31,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
@@ -40,6 +46,11 @@ import com.dutu007.paceapp.data.MessageSegment
 import com.dutu007.paceapp.data.PaceCardData
 import com.dutu007.paceapp.data.PaceCardParser
 import com.dutu007.paceapp.ui.theme.PacePalette
+
+fun copyPlainText(context: Context, text: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    cm.setPrimaryClip(ClipData.newPlainText("pace", text))
+}
 
 @Composable
 fun RichMessageBody(
@@ -84,6 +95,17 @@ fun MarkdownBlock(
                     }
                     CodeBlockCard(lang = lang, code = codeLines.joinToString("\n"))
                 }
+                isMarkdownTableHeader(lines, i) -> {
+                    val headers = splitMarkdownRow(lines[i])
+                    i += 2 // skip header + separator
+                    val bodyRows = mutableListOf<List<String>>()
+                    while (i < lines.size && lines[i].trim().startsWith("|") && lines[i].trim().contains("|")) {
+                        bodyRows += splitMarkdownRow(lines[i])
+                        i++
+                    }
+                    i-- // compensated by loop i++
+                    MarkdownTable(headers = headers, rows = bodyRows)
+                }
                 trimmed.isEmpty() -> {
                     Spacer(Modifier.height(2.dp))
                 }
@@ -112,24 +134,31 @@ fun MarkdownBlock(
                     )
                 }
                 trimmed.startsWith("> ") -> {
+                    val quoteLines = mutableListOf(trimmed.removePrefix("> "))
+                    while (i + 1 < lines.size && lines[i + 1].trim().startsWith("> ")) {
+                        i++
+                        quoteLines += lines[i].trim().removePrefix("> ")
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .height(IntrinsicSize.Min)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(PacePalette.Muted.copy(alpha = 0.7f))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                            .background(PacePalette.Muted.copy(alpha = 0.65f))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
                     ) {
                         Box(
                             Modifier
                                 .width(3.dp)
-                                .height(18.dp)
+                                .fillMaxHeight()
                                 .background(PacePalette.Primary, RoundedCornerShape(2.dp)),
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = parseInlineMarkdown(trimmed.removePrefix("> ")),
+                            text = parseInlineMarkdown(quoteLines.joinToString("\n")),
                             style = MaterialTheme.typography.bodyMedium,
                             color = PacePalette.TextSecondary,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
@@ -184,9 +213,79 @@ fun MarkdownBlock(
     }
 }
 
+private fun isMarkdownTableHeader(lines: List<String>, index: Int): Boolean {
+    if (index + 1 >= lines.size) return false
+    val first = lines[index].trim()
+    val second = lines[index + 1].trim()
+    return first.contains("|") && Regex("^\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)+\\|?$").matches(second)
+}
+
+private fun splitMarkdownRow(line: String): List<String> =
+    line.trim().removePrefix("|").removeSuffix("|").split("|").map { it.trim() }
+
+@Composable
+private fun MarkdownTable(headers: List<String>, rows: List<List<String>>) {
+    ResponsiveDataTable(columns = headers, rows = rows)
+}
+
+@Composable
+private fun ResponsiveDataTable(columns: List<String>, rows: List<List<String>>) {
+    val colCount = maxOf(columns.size, rows.maxOfOrNull { it.size } ?: 0).coerceAtLeast(1)
+    val fitScreen = colCount <= 3
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = PacePalette.Background,
+        border = BorderStroke(1.dp, PacePalette.CardBorder),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        val tableContent: @Composable () -> Unit = {
+            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (columns.isNotEmpty()) {
+                    Row(modifier = if (fitScreen) Modifier.fillMaxWidth() else Modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        for (c in 0 until colCount) {
+                            val cellModifier = if (fitScreen) Modifier.weight(1f) else Modifier.widthIn(min = 84.dp, max = 140.dp)
+                            Text(
+                                text = columns.getOrElse(c) { "" },
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = PacePalette.Primary,
+                                modifier = cellModifier,
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = PacePalette.CardBorder)
+                }
+                rows.forEachIndexed { idx, row ->
+                    Row(modifier = if (fitScreen) Modifier.fillMaxWidth() else Modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        for (c in 0 until colCount) {
+                            val cellModifier = if (fitScreen) Modifier.weight(1f) else Modifier.widthIn(min = 84.dp, max = 140.dp)
+                            Text(
+                                text = parseInlineMarkdown(row.getOrElse(c) { "" }),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = PacePalette.TextPrimary,
+                                modifier = cellModifier,
+                            )
+                        }
+                    }
+                    if (idx < rows.lastIndex) {
+                        HorizontalDivider(color = PacePalette.CardBorder.copy(alpha = 0.45f))
+                    }
+                }
+            }
+        }
+        if (fitScreen) {
+            tableContent()
+        } else {
+            Box(Modifier.horizontalScroll(rememberScrollState())) {
+                tableContent()
+            }
+        }
+    }
+}
+
 @Composable
 private fun CodeBlockCard(lang: String, code: String) {
-    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = PacePalette.CodeBg,
@@ -204,7 +303,7 @@ private fun CodeBlockCard(lang: String, code: String) {
                     color = PacePalette.CodeText.copy(alpha = 0.65f),
                 )
                 TextButton(
-                    onClick = { clipboard.setText(AnnotatedString(code)) },
+                    onClick = { copyPlainText(context, code) },
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                 ) {
                     Text("复制", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7DD3FC))
@@ -242,38 +341,35 @@ fun PaceCardView(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Surface(
-                            color = PacePalette.PrimarySoft,
-                            shape = RoundedCornerShape(6.dp),
-                        ) {
-                            val badge = when (card.type) {
-                                "checklist" -> "清单"
-                                "stats" -> "统计"
-                                "table" -> "表格"
-                                else -> "卡片"
-                            }
-                            Text(
-                                badge,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = PacePalette.Primary,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Surface(color = PacePalette.PrimarySoft, shape = RoundedCornerShape(6.dp)) {
+                        val badge = when (card.type) {
+                            "checklist" -> "清单"
+                            "stats" -> "统计"
+                            "table" -> "表格"
+                            else -> "卡片"
                         }
-                        Text(card.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    }
-                    if (card.subtitle.isNotBlank()) {
                         Text(
-                            card.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = PacePalette.TextSecondary,
+                            badge,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PacePalette.Primary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         )
                     }
+                    Text(
+                        card.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (card.subtitle.isNotBlank()) {
+                    Text(
+                        card.subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = PacePalette.TextSecondary,
+                    )
                 }
             }
 
@@ -287,6 +383,7 @@ fun PaceCardView(
                             shape = RoundedCornerShape(12.dp),
                             color = PacePalette.Background,
                             border = BorderStroke(1.dp, PacePalette.CardBorder),
+                            modifier = Modifier.widthIn(min = 96.dp),
                         ) {
                             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                                 Text(m.label, style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary)
@@ -327,11 +424,7 @@ fun PaceCardView(
                                     color = if (item.done) PacePalette.TextSecondary else PacePalette.TextPrimary,
                                 )
                                 if (item.detail.isNotBlank()) {
-                                    Text(
-                                        item.detail,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = PacePalette.TextSecondary,
-                                    )
+                                    Text(item.detail, style = MaterialTheme.typography.bodySmall, color = PacePalette.TextSecondary)
                                 }
                             }
                         }
@@ -340,42 +433,7 @@ fun PaceCardView(
             }
 
             if (card.columns.isNotEmpty() || card.rows.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(PacePalette.Background)
-                        .padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (card.columns.isNotEmpty()) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            card.columns.forEach { col ->
-                                Text(
-                                    col,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = PacePalette.Primary,
-                                    modifier = Modifier.width(100.dp),
-                                )
-                            }
-                        }
-                        HorizontalDivider(color = PacePalette.CardBorder)
-                    }
-                    card.rows.forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            row.forEach { cell ->
-                                Text(
-                                    cell,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = PacePalette.TextPrimary,
-                                    modifier = Modifier.width(100.dp),
-                                )
-                            }
-                        }
-                    }
-                }
+                ResponsiveDataTable(columns = card.columns, rows = card.rows)
             }
 
             if (card.content.isNotBlank()) {
@@ -383,10 +441,7 @@ fun PaceCardView(
             }
 
             if (actionLabel != null || secondaryActionLabel != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     if (secondaryActionLabel != null && onSecondaryAction != null) {
                         TextButton(onClick = onSecondaryAction, contentPadding = PaddingValues(horizontal = 10.dp)) {
                             Text(secondaryActionLabel, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
@@ -419,6 +474,30 @@ private fun parseInlineMarkdown(input: String): AnnotatedString = buildAnnotated
                     idx += 2
                 }
             }
+            input.startsWith("~~", idx) -> {
+                val end = input.indexOf("~~", idx + 2)
+                if (end > idx + 2) {
+                    withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough, color = PacePalette.TextSecondary)) {
+                        append(input.substring(idx + 2, end))
+                    }
+                    idx = end + 2
+                } else {
+                    append("~~")
+                    idx += 2
+                }
+            }
+            input[idx] == '*' -> {
+                val end = input.indexOf('*', idx + 1)
+                if (end > idx + 1 && !input.substring(idx + 1, end).contains('\n')) {
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        append(input.substring(idx + 1, end))
+                    }
+                    idx = end + 1
+                } else {
+                    append('*')
+                    idx++
+                }
+            }
             input[idx] == '`' -> {
                 val end = input.indexOf('`', idx + 1)
                 if (end > idx + 1) {
@@ -434,6 +513,20 @@ private fun parseInlineMarkdown(input: String): AnnotatedString = buildAnnotated
                     idx = end + 1
                 } else {
                     append('`')
+                    idx++
+                }
+            }
+            input[idx] == '[' -> {
+                val closeBracket = input.indexOf("](", idx + 1)
+                val closeParen = if (closeBracket > 0) input.indexOf(')', closeBracket + 2) else -1
+                if (closeBracket > idx + 1 && closeParen > closeBracket + 2) {
+                    val label = input.substring(idx + 1, closeBracket)
+                    withStyle(SpanStyle(color = PacePalette.Primary, textDecoration = TextDecoration.Underline)) {
+                        append(label)
+                    }
+                    idx = closeParen + 1
+                } else {
+                    append('[')
                     idx++
                 }
             }

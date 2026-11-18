@@ -14,216 +14,242 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.dutu007.paceapp.data.EntryItem
 import com.dutu007.paceapp.ui.theme.PacePalette
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EntriesScreen(
     state: PaceUiState,
     viewModel: PaceViewModel,
 ) {
+    var showCaptureSheet by remember { mutableStateOf(false) }
+
     val pinnedCards = state.entries.filter { it.pinned && it.card != null }
     val normalEntries = state.entries.filterNot { it.pinned && it.card != null }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            QuickCaptureCard(state = state, viewModel = viewModel)
-        }
-
-        if (pinnedCards.isNotEmpty()) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 88.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Compact search + quick-trigger bar (Moe Memos style)
             item {
-                Text(
-                    "已固定展示看板",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = PacePalette.TextSecondary,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            items(pinnedCards, key = { "pin_${it.id}" }) { item ->
-                item.card?.let { card ->
-                    PaceCardView(
-                        card = card,
-                        actionLabel = "取消固定",
-                        onAction = { viewModel.toggleEntryPinned(item) },
-                        secondaryActionLabel = "删除",
-                        onSecondaryAction = { viewModel.deleteEntry(item.id) },
-                    )
-                }
-            }
-        }
-
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = state.entrySearch,
-                    onValueChange = viewModel::setEntrySearch,
-                    placeholder = { Text("搜索记录内容...") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    val kinds = listOf(
-                        "all" to "全部",
-                        "note" to "随手记",
-                        "todo" to "待办",
-                        "diary" to "日记",
-                        "idea" to "灵感",
-                    )
-                    kinds.forEach { (key, label) ->
-                        FilterChip(
-                            selected = state.entryFilterKind == key,
-                            onClick = { viewModel.setEntryFilterKind(key) },
-                            label = { Text(label) },
-                        )
-                    }
-                }
-            }
-        }
-
-        when {
-            state.entriesLoading && state.entries.isEmpty() -> {
-                item {
-                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                }
-            }
-            normalEntries.isEmpty() -> {
-                item {
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = PacePalette.Card,
-                        border = BorderStroke(1.dp, PacePalette.CardBorder),
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = state.entrySearch,
+                        onValueChange = viewModel::setEntrySearch,
+                        placeholder = { Text("搜索记录内容或标签...") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Column(
-                            modifier = Modifier.padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text("还没有记录", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "在上方写一句话立即存入数据库，并可一键同步写入日记或笔记文档。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = PacePalette.TextSecondary,
+                        listOf(
+                            "all" to "全部",
+                            "note" to "随手记",
+                            "todo" to "待办",
+                            "diary" to "日记",
+                            "idea" to "灵感",
+                        ).forEach { (key, label) ->
+                            FilterChip(
+                                selected = state.entryFilterKind == key,
+                                onClick = { viewModel.setEntryFilterKind(key) },
+                                label = { Text(label) },
                             )
                         }
                     }
                 }
             }
-            else -> {
-                items(normalEntries, key = { it.id }) { entry ->
-                    EntryCard(
-                        entry = entry,
-                        onToggleComplete = { viewModel.toggleEntryCompleted(entry) },
-                        onTogglePin = { viewModel.toggleEntryPinned(entry) },
-                        onOpenDoc = { path -> viewModel.openDoc(path) },
-                        onDelete = { viewModel.deleteEntry(entry.id) },
+
+            if (pinnedCards.isNotEmpty()) {
+                item {
+                    Text(
+                        "展示看板",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = PacePalette.TextSecondary,
                     )
+                }
+                items(pinnedCards, key = { "pin_${it.id}" }) { item ->
+                    item.card?.let { card ->
+                        PaceCardView(
+                            card = card,
+                            actionLabel = "取消固定",
+                            onAction = { viewModel.toggleEntryPinned(item) },
+                            secondaryActionLabel = "删除",
+                            onSecondaryAction = { viewModel.deleteEntry(item.id) },
+                        )
+                    }
+                }
+            }
+
+            when {
+                state.entriesLoading && state.entries.isEmpty() -> {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                }
+                normalEntries.isEmpty() -> {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = PacePalette.Card,
+                            border = BorderStroke(1.dp, PacePalette.CardBorder),
+                            onClick = { showCaptureSheet = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text("记录库还是空的", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "点击右下角 + 写一句话，立即存进数据库并可选同步写入服务器日记或笔记文档。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = PacePalette.TextSecondary,
+                                )
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    items(normalEntries, key = { it.id }) { entry ->
+                        EntryCard(
+                            entry = entry,
+                            onToggleComplete = { viewModel.toggleEntryCompleted(entry) },
+                            onTogglePin = { viewModel.toggleEntryPinned(entry) },
+                            onOpenDoc = { path -> viewModel.openDoc(path) },
+                            onDelete = { viewModel.deleteEntry(entry.id) },
+                        )
+                    }
                 }
             }
         }
-    }
-}
 
-@Composable
-private fun QuickCaptureCard(state: PaceUiState, viewModel: PaceViewModel) {
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = PacePalette.Card,
-        border = BorderStroke(1.dp, PacePalette.CardBorder),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+        FloatingActionButton(
+            onClick = { showCaptureSheet = true },
+            containerColor = PacePalette.Primary,
+            contentColor = Color.White,
+            shape = CircleShape,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(18.dp),
         ) {
-            Text("写一句话记下来", style = MaterialTheme.typography.titleSmall, color = PacePalette.Primary)
-            OutlinedTextField(
-                value = state.captureText,
-                onValueChange = viewModel::setCaptureText,
-                placeholder = { Text("例如：今天慢跑 5 公里，状态不错；或者记一个待办...") },
-                minLines = 2,
-                maxLines = 4,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = state.captureTags,
-                onValueChange = viewModel::setCaptureTags,
-                placeholder = { Text("标签（空格或逗号分隔，如：跑步 科研）") },
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            Text("+", fontSize = 24.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+
+    if (showCaptureSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showCaptureSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = PacePalette.Card,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                listOf("note" to "随手记", "todo" to "待办", "diary" to "日记", "idea" to "灵感").forEach { (k, label) ->
-                    FilterChip(
-                        selected = state.captureKind == k,
-                        onClick = { viewModel.setCaptureKind(k) },
-                        label = { Text(label) },
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
+                Text("写一句话记下来", style = MaterialTheme.typography.titleMedium, color = PacePalette.Primary)
+                OutlinedTextField(
+                    value = state.captureText,
+                    onValueChange = viewModel::setCaptureText,
+                    placeholder = { Text("例如：今天慢跑 5 公里，状态不错；或记一条待办...") },
+                    minLines = 3,
+                    maxLines = 6,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = state.captureTags,
+                    onValueChange = viewModel::setCaptureTags,
+                    placeholder = { Text("标签（空格或逗号分隔，如：跑步 科研）") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Text("记录类型", style = MaterialTheme.typography.labelMedium, color = PacePalette.TextSecondary)
                 Row(
-                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf("note" to "随手记", "todo" to "待办", "diary" to "日记", "idea" to "灵感").forEach { (k, label) ->
+                        FilterChip(
+                            selected = state.captureKind == k,
+                            onClick = { viewModel.setCaptureKind(k) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+
+                Text("文档同步", style = MaterialTheme.typography.labelMedium, color = PacePalette.TextSecondary)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     listOf("diary" to "同步今日日记", "note" to "同步随手记.md", "" to "仅存数据库").forEach { (mode, label) ->
                         FilterChip(
                             selected = state.captureSyncDoc == mode,
                             onClick = { viewModel.setCaptureSyncDoc(mode) },
-                            label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                            label = { Text(label) },
                         )
                     }
                 }
+
                 Button(
-                    onClick = viewModel::submitQuickCapture,
+                    onClick = {
+                        viewModel.submitQuickCapture()
+                        showCaptureSheet = false
+                    },
                     enabled = state.captureText.isNotBlank() && !state.captureBusy,
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
                 ) {
                     if (state.captureBusy) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
                     } else {
-                        Text("保存")
+                        Text("保存到空间", fontWeight = FontWeight.SemiBold)
                     }
                 }
+                Spacer(Modifier.height(12.dp))
             }
         }
     }

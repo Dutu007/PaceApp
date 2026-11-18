@@ -10,15 +10,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -66,92 +66,90 @@ fun DocsScreen(
         q.isEmpty() || doc.title.lowercase().contains(q) || doc.path.lowercase().contains(q) || doc.preview.lowercase().contains(q)
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = state.docSearch,
-                    onValueChange = viewModel::setDocSearch,
-                    placeholder = { Text("搜索服务器笔记、日记、记忆...") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.weight(1f),
-                )
-                Button(
-                    onClick = { showCreateDialog = true },
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
-                ) {
-                    Text("+ 新建")
-                }
-            }
-        }
-
-        item {
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf(
-                    "all" to "全部",
-                    "note" to "笔记",
-                    "diary" to "日记",
-                    "memory" to "Hermes记忆",
-                    "data" to "数据文件",
-                ).forEach { (cat, label) ->
-                    FilterChip(
-                        selected = state.docFilterCategory == cat,
-                        onClick = { viewModel.setDocFilterCategory(cat) },
-                        label = { Text(label) },
-                    )
-                }
-            }
-        }
-
-        when {
-            state.docsLoading && state.docs.isEmpty() -> {
-                item {
-                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                }
-            }
-            filtered.isEmpty() -> {
-                item {
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = PacePalette.Card,
-                        border = BorderStroke(1.dp, PacePalette.CardBorder),
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 88.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = state.docSearch,
+                        onValueChange = viewModel::setDocSearch,
+                        placeholder = { Text("搜索服务器笔记、日记、记忆...") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Column(
-                            modifier = Modifier.padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text("没有匹配的文档", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "这里实时同步服务器 personal-assistant/data 中的笔记、日记和 Hermes 记忆。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = PacePalette.TextSecondary,
+                        listOf(
+                            "all" to "全部",
+                            "note" to "笔记",
+                            "diary" to "日记",
+                            "memory" to "Hermes记忆",
+                            "data" to "数据文件",
+                        ).forEach { (cat, label) ->
+                            FilterChip(
+                                selected = state.docFilterCategory == cat,
+                                onClick = { viewModel.setDocFilterCategory(cat) },
+                                label = { Text(label) },
                             )
                         }
                     }
                 }
             }
-            else -> {
-                items(filtered, key = { it.path }) { doc ->
-                    DocRowCard(doc = doc, onClick = { viewModel.openDoc(doc.path) })
+
+            when {
+                state.docsLoading && state.docs.isEmpty() -> {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                }
+                filtered.isEmpty() -> {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = PacePalette.Card,
+                            border = BorderStroke(1.dp, PacePalette.CardBorder),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text("没有匹配的文档", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "这里实时同步服务器 personal-assistant/data 中的笔记、日记和 Hermes 记忆。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = PacePalette.TextSecondary,
+                                )
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    items(filtered, key = { it.path }) { doc ->
+                        DocRowCard(doc = doc, onClick = { viewModel.openDoc(doc.path) })
+                    }
                 }
             }
+        }
+
+        FloatingActionButton(
+            onClick = { showCreateDialog = true },
+            containerColor = PacePalette.Primary,
+            contentColor = Color.White,
+            shape = CircleShape,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(18.dp),
+        ) {
+            Text("+", fontSize = 24.sp, fontWeight = FontWeight.Medium)
         }
     }
 
@@ -320,7 +318,14 @@ fun DocDetailOverlay(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(doc.path, style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary)
+                    Text(
+                        doc.path,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PacePalette.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
                     OutlinedButton(
                         onClick = onAskHermes,
                         shape = RoundedCornerShape(10.dp),
