@@ -1,8 +1,11 @@
 package com.dutu007.paceapp
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -10,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,10 +70,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.dutu007.paceapp.data.ApprovalRequest
 import com.dutu007.paceapp.data.ChatMessage
 import com.dutu007.paceapp.data.SessionItem
 import com.dutu007.paceapp.ui.theme.PacePalette
+import java.io.File
 
 private val QuickPrompts = listOf(
     "记住：今天完成了一项关键任务，帮我同步存入记录和日记",
@@ -328,12 +334,53 @@ private fun DoubaoComposer(
     var voiceListening by remember { mutableStateOf(false) }
     var voiceCancelling by remember { mutableStateOf(false) }
     var voicePartial by remember { mutableStateOf("") }
+    var showAttachmentTray by remember { mutableStateOf(false) }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture(),
+    ) { success ->
+        val uri = pendingCameraUri
+        pendingCameraUri = null
+        if (success && uri != null) {
+            viewModel.addAttachment(context, uri, isImage = true, fallbackName = "拍照图片.jpg")
+            showAttachmentTray = false
+        }
+    }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) {
+            viewModel.addAttachment(context, uri, isImage = true, fallbackName = "相册图片.jpg")
+            showAttachmentTray = false
+        }
+    }
+
+    val fileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            viewModel.addAttachment(context, uri, isImage = false, fallbackName = "文档附件")
+            showAttachmentTray = false
+        }
+    }
+
+    fun launchCamera() {
+        val uri = createTempCameraUri(context)
+        if (uri == null) {
+            viewModel.notifyHint("无法创建拍照缓存文件", isError = true)
+            return
+        }
+        pendingCameraUri = uri
+        cameraLauncher.launch(uri)
+    }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
-            viewModel.notifyHint("已授权麦克风，长按右侧麦克风即可语音输入")
+            viewModel.notifyHint("已授权麦克风，长按中上方麦克风即可语音输入")
         } else {
             viewModel.notifyHint("需要麦克风权限才能使用语音输入", isError = true)
         }
@@ -357,8 +404,9 @@ private fun DoubaoComposer(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (voiceListening || state.voiceRefining) {
             val bg = when {
@@ -419,20 +467,166 @@ private fun DoubaoComposer(
             }
         }
 
+        // Top-center floating Hold-to-Talk Mic Pill directly above input box
         Surface(
-            color = PacePalette.Card,
+            color = when {
+                voiceCancelling -> MaterialTheme.colorScheme.errorContainer
+                voiceListening -> PacePalette.Primary
+                else -> PacePalette.Card
+            },
             border = BorderStroke(
                 width = 1.dp,
                 color = if (voiceListening) PacePalette.Primary else PacePalette.CardBorder,
             ),
+            shape = RoundedCornerShape(99.dp),
+            tonalElevation = 1.dp,
+            modifier = Modifier.pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val quickRelease = withTimeoutOrNull(160L) {
+                        waitForUpOrCancellation()
+                    }
+                    if (quickRelease != null) {
+                        viewModel.notifyHint("按住此处麦克风说话，松手识别填入输入框")
+                        return@awaitEachGesture
+                    }
+
+                    val granted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO,
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (!granted) {
+                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        waitForUpOrCancellation()
+                        return@awaitEachGesture
+                    }
+
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    voicePartial = ""
+                    voiceCancelling = false
+                    val started = voiceController.start()
+                    if (!started) {
+                        waitForUpOrCancellation()
+                        return@awaitEachGesture
+                    }
+                    voiceListening = true
+
+                    val startY = down.position.y
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
+                        if (change == null || !change.pressed) {
+                            break
+                        }
+                        voiceCancelling = (startY - change.position.y) > cancelThresholdPx
+                    }
+
+                    val shouldCancel = voiceCancelling
+                    voiceCancelling = false
+                    voiceListening = false
+                    voiceController.finish(cancel = shouldCancel)
+                    if (shouldCancel) {
+                        voicePartial = ""
+                    }
+                }
+            },
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = MicIcon,
+                    contentDescription = "按住说话",
+                    tint = when {
+                        voiceCancelling -> MaterialTheme.colorScheme.error
+                        voiceListening -> Color.White
+                        else -> PacePalette.Primary
+                    },
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = if (voiceListening) "松手转写" else "按住说话",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = when {
+                        voiceCancelling -> MaterialTheme.colorScheme.error
+                        voiceListening -> Color.White
+                        else -> PacePalette.TextSecondary
+                    },
+                )
+            }
+        }
+
+        if (state.pendingAttachments.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                state.pendingAttachments.forEach { att ->
+                    Surface(
+                        color = PacePalette.PrimarySoft,
+                        border = BorderStroke(1.dp, PacePalette.Primary.copy(alpha = 0.25f)),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = (if (att.isImage) "🖼 " else "📎 ") + att.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = PacePalette.Primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "×",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = PacePalette.Primary,
+                                modifier = Modifier.clickable { viewModel.removeAttachment(att.id) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Doubao-style bottom input pill: [Camera] [Text Input] [Send/Stop] [+]
+        Surface(
+            color = PacePalette.Card,
+            border = BorderStroke(1.dp, PacePalette.CardBorder),
             shape = RoundedCornerShape(26.dp),
             tonalElevation = 1.dp,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Row(
-                modifier = Modifier.padding(start = 16.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+                modifier = Modifier.padding(start = 6.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
+                // Leftmost Camera button
+                Surface(
+                    onClick = { launchCamera() },
+                    color = PacePalette.Muted,
+                    shape = CircleShape,
+                    modifier = Modifier.size(38.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = CameraIcon,
+                            contentDescription = "拍照",
+                            tint = PacePalette.Primary,
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(8.dp))
+
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -442,7 +636,7 @@ private fun DoubaoComposer(
                 ) {
                     if (state.draft.isEmpty()) {
                         Text(
-                            "发消息或长按右侧说话...",
+                            "发消息...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = PacePalette.TextSecondary.copy(alpha = 0.7f),
                             maxLines = 1,
@@ -459,83 +653,6 @@ private fun DoubaoComposer(
                     )
                 }
 
-                Spacer(Modifier.width(4.dp))
-
-                // Always-present Mic button immediately left of Send/Stop (Doubao style)
-                Surface(
-                    color = when {
-                        voiceCancelling -> MaterialTheme.colorScheme.errorContainer
-                        voiceListening -> PacePalette.Primary
-                        else -> PacePalette.Muted
-                    },
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .pointerInput(Unit) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown(requireUnconsumed = false)
-                                val quickRelease = withTimeoutOrNull(160L) {
-                                    waitForUpOrCancellation()
-                                }
-                                if (quickRelease != null) {
-                                    viewModel.notifyHint("长按麦克风说话，松手转写到输入框")
-                                    return@awaitEachGesture
-                                }
-
-                                val granted = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.RECORD_AUDIO,
-                                ) == PackageManager.PERMISSION_GRANTED
-                                if (!granted) {
-                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                    waitForUpOrCancellation()
-                                    return@awaitEachGesture
-                                }
-
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                voicePartial = ""
-                                voiceCancelling = false
-                                val started = voiceController.start()
-                                if (!started) {
-                                    waitForUpOrCancellation()
-                                    return@awaitEachGesture
-                                }
-                                voiceListening = true
-
-                                val startY = down.position.y
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
-                                    if (change == null || !change.pressed) {
-                                        break
-                                    }
-                                    voiceCancelling = (startY - change.position.y) > cancelThresholdPx
-                                }
-
-                                val shouldCancel = voiceCancelling
-                                voiceCancelling = false
-                                voiceListening = false
-                                voiceController.finish(cancel = shouldCancel)
-                                if (shouldCancel) {
-                                    voicePartial = ""
-                                }
-                            }
-                        },
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = MicIcon,
-                            contentDescription = "长按语音输入",
-                            tint = when {
-                                voiceCancelling -> MaterialTheme.colorScheme.error
-                                voiceListening -> Color.White
-                                else -> PacePalette.Primary
-                            },
-                            modifier = Modifier.size(19.dp),
-                        )
-                    }
-                }
-
                 Spacer(Modifier.width(6.dp))
 
                 if (state.streaming) {
@@ -550,7 +667,7 @@ private fun DoubaoComposer(
                         }
                     }
                 } else {
-                    val canSend = state.draft.isNotBlank() && !state.voiceRefining
+                    val canSend = (state.draft.isNotBlank() || state.pendingAttachments.isNotEmpty()) && !state.voiceRefining
                     Surface(
                         onClick = { if (canSend) viewModel.sendMessage() },
                         color = if (canSend) PacePalette.Primary else PacePalette.Muted,
@@ -567,10 +684,87 @@ private fun DoubaoComposer(
                         }
                     }
                 }
+
+                Spacer(Modifier.width(6.dp))
+
+                // Rightmost '+' attachment drawer toggle
+                Surface(
+                    onClick = { showAttachmentTray = !showAttachmentTray },
+                    color = if (showAttachmentTray) PacePalette.PrimarySoft else PacePalette.Muted,
+                    shape = CircleShape,
+                    modifier = Modifier.size(38.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = PlusIcon,
+                            contentDescription = "更多附件",
+                            tint = PacePalette.Primary,
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showAttachmentTray) {
+            Surface(
+                color = PacePalette.Card,
+                border = BorderStroke(1.dp, PacePalette.CardBorder),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    AttachmentActionTile(icon = CameraIcon, label = "拍照") {
+                        launchCamera()
+                    }
+                    AttachmentActionTile(icon = GalleryIcon, label = "相册") {
+                        galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    }
+                    AttachmentActionTile(icon = FileDocIcon, label = "选择文件") {
+                        fileLauncher.launch(arrayOf("*/*"))
+                    }
+                }
             }
         }
     }
 }
+
+@Composable
+private fun AttachmentActionTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Surface(
+            color = PacePalette.Background,
+            border = BorderStroke(1.dp, PacePalette.CardBorder),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.size(48.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = label, tint = PacePalette.Primary, modifier = Modifier.size(22.dp))
+            }
+        }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = PacePalette.TextPrimary)
+    }
+}
+
+private fun createTempCameraUri(context: Context): Uri? = runCatching {
+    val dir = File(context.cacheDir, "camera").apply { mkdirs() }
+    val photo = File(dir, "capture_${System.currentTimeMillis()}.jpg")
+    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photo)
+}.getOrNull()
 
 @Composable
 private fun MessageItem(

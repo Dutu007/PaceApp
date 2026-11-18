@@ -35,12 +35,15 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -188,6 +191,14 @@ private data class SttRefineResponseDto(
     val refined: Boolean = false,
 )
 
+@Serializable
+private data class UploadFileResponseDto(
+    val path: String,
+    @SerialName("host_path") val hostPath: String,
+    val name: String,
+    val size: Long = 0,
+)
+
 class PaceRepository(context: Context) {
     private val preferences = context.getSharedPreferences("paceapp_session", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
@@ -291,7 +302,11 @@ class PaceRepository(context: Context) {
         }
     }
 
-    fun streamChat(sessionId: String, message: String): Flow<ChatStreamEvent> = flow {
+    fun streamChat(
+        sessionId: String,
+        message: String,
+        imageDataUrls: List<String> = emptyList(),
+    ): Flow<ChatStreamEvent> = flow {
         val token = preferences.getString("token", "").orEmpty()
         val url = URL("$baseUrl/api/v1/sessions/$sessionId/chat/stream")
         val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -305,7 +320,29 @@ class PaceRepository(context: Context) {
             setRequestProperty("Accept", "text/event-stream")
         }
         try {
-            val payload = buildJsonObject { put("message", message) }.toString()
+            val payload = if (imageDataUrls.isEmpty()) {
+                buildJsonObject { put("message", message) }.toString()
+            } else {
+                buildJsonObject {
+                    put(
+                        "message",
+                        buildJsonArray {
+                            imageDataUrls.forEach { dataUrl ->
+                                addJsonObject {
+                                    put("type", "image_url")
+                                    putJsonObject("image_url") { put("url", dataUrl) }
+                                }
+                            }
+                            if (message.isNotBlank()) {
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", message)
+                                }
+                            }
+                        },
+                    )
+                }.toString()
+            }
             conn.outputStream.use { out ->
                 out.write(payload.toByteArray(StandardCharsets.UTF_8))
                 out.flush()
@@ -365,6 +402,41 @@ class PaceRepository(context: Context) {
             jsonBody(SttRefineRequestDto(text = text, candidates = candidates, context = currentDraft))
         }.bodyChecked<SttRefineResponseDto>()
         return resp.text.ifBlank { text }
+    }
+
+    suspend fun uploadFileBytes(fileName: String, bytes: ByteArray): UploadedFile = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        val boundary = "PaceBoundary${System.currentTimeMillis()}"
+        val token = preferences.getString("token", "").orEmpty()
+        val url = URL("$baseUrl/api/v1/uploads")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+        }
+        try {
+            conn.outputStream.use { out ->
+                val header = "--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"${fileName.replace("\"", "_")}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+                out.write(header.toByteArray(StandardCharsets.UTF_8))
+                out.write(bytes)
+                out.write("\r\n--$boundary--\r\n".toByteArray(StandardCharsets.UTF_8))
+                out.flush()
+            }
+            val code = conn.responseCode
+            val raw = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader(StandardCharsets.UTF_8)?.readText().orEmpty()
+            if (code !in 200..299) {
+                val errCode = runCatching { json.decodeFromString<ErrorDto>(raw).error }.getOrNull()
+                throw ApiException(code, errCode ?: "upload_failed")
+            }
+            val dto = json.decodeFromString<UploadFileResponseDto>(raw)
+            UploadedFile(dto.path, dto.hostPath, dto.name, dto.size)
+        } finally {
+            conn.disconnect()
+        }
     }
 
     suspend fun listEntries(kind: String? = null, query: String? = null): List<EntryItem> {
@@ -466,9 +538,11 @@ class PaceRepository(context: Context) {
             else -> runCatching {
                 element.jsonArray.mapNotNull { part ->
                     val obj = part.jsonObject
-                    if (obj["type"]?.jsonPrimitive?.contentOrNull == "text") {
-                        obj["text"]?.jsonPrimitive?.contentOrNull
-                    } else null
+                    when (obj["type"]?.jsonPrimitive?.contentOrNull) {
+                        "text", "input_text", "output_text" -> obj["text"]?.jsonPrimitive?.contentOrNull
+                        "image_url", "input_image" -> "[图片]"
+                        else -> null
+                    }
                 }.joinToString("\n")
             }.getOrDefault("")
         }

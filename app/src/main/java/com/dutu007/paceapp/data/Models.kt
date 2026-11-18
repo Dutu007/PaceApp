@@ -106,6 +106,20 @@ data class DocDetail(
     val updatedAt: String,
 )
 
+data class PendingAttachment(
+    val id: String,
+    val uriString: String,
+    val name: String,
+    val isImage: Boolean,
+)
+
+data class UploadedFile(
+    val path: String,
+    val hostPath: String,
+    val name: String,
+    val size: Long,
+)
+
 sealed interface ChatStreamEvent {
     data class RunStarted(val runId: String?) : ChatStreamEvent
     data class AssistantDelta(val messageId: String, val delta: String) : ChatStreamEvent

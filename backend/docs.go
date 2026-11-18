@@ -385,5 +385,72 @@ func (s *server) putDocContent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, doc)
 }
 
+func (s *server) uploadFile(w http.ResponseWriter, r *http.Request) {
+	if s.docs == nil || s.docs.assistantDir == "" {
+		errorJSON(w, http.StatusServiceUnavailable, "uploads_unavailable")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 12<<20)
+	if err := r.ParseMultipartForm(12 << 20); err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid_upload")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		errorJSON(w, http.StatusBadRequest, "missing_file")
+		return
+	}
+	defer file.Close()
+
+	baseName := filepath.Base(strings.ReplaceAll(header.Filename, "\\", "/"))
+	safeName := sanitizeUploadFilename(baseName)
+	stamp := time.Now().In(s.docs.tz).Format("20060102_150405")
+	rel := fmt.Sprintf("uploads/%s_%s", stamp, safeName)
+	full, err := s.docs.resolveAssistantFile(rel)
+	if err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid_path")
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		errorJSON(w, http.StatusInternalServerError, "upload_failed")
+		return
+	}
+	out, err := os.OpenFile(full, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		errorJSON(w, http.StatusInternalServerError, "upload_failed")
+		return
+	}
+	written, copyErr := out.ReadFrom(file)
+	closeErr := out.Close()
+	if copyErr != nil || closeErr != nil {
+		errorJSON(w, http.StatusInternalServerError, "upload_failed")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"path":      rel,
+		"host_path": "/home/dutu/workspace/personal-assistant/data/" + rel,
+		"name":      baseName,
+		"size":      written,
+	})
+}
+
+func sanitizeUploadFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '-', r == '_', r >= 0x4e00 && r <= 0x9fff:
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	out := strings.Trim(b.String(), "._")
+	if out == "" {
+		return "file.bin"
+	}
+	return out
+}
+
 // Keep json import used in case structured JSON summaries are added later.
 var _ = json.Marshal

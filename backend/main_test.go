@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -292,5 +293,41 @@ func TestSttRefine(t *testing.T) {
 	}
 	if !out.Refined || !strings.Contains(out.Text, "Hermes") {
 		t.Fatalf("unexpected stt refine output: %+v", out)
+	}
+}
+
+func TestUploadFile(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	token, _, _ := srv.auth.issueToken(time.Now())
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("file", "notes_test.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("hello pace"))
+	_ = mw.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/uploads", &body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 upload, got %d", resp.StatusCode)
+	}
+	var res map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	rel, _ := res["path"].(string)
+	if !strings.HasPrefix(rel, "uploads/") {
+		t.Fatalf("unexpected upload path: %+v", res)
 	}
 }

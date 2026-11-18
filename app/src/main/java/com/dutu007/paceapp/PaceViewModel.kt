@@ -2,6 +2,11 @@ package com.dutu007.paceapp
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dutu007.paceapp.data.ApiException
@@ -14,6 +19,7 @@ import com.dutu007.paceapp.data.DocSummary
 import com.dutu007.paceapp.data.EntryItem
 import com.dutu007.paceapp.data.PaceCardData
 import com.dutu007.paceapp.data.PaceRepository
+import com.dutu007.paceapp.data.PendingAttachment
 import com.dutu007.paceapp.data.SessionItem
 import com.dutu007.paceapp.data.ToolActivity
 import com.dutu007.paceapp.data.UserProfile
@@ -25,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
@@ -59,6 +66,7 @@ data class PaceUiState(
     val toolActivities: List<ToolActivity> = emptyList(),
     val pendingApproval: ApprovalRequest? = null,
     val voiceRefining: Boolean = false,
+    val pendingAttachments: List<PendingAttachment> = emptyList(),
 
     // Entries / Quick capture state
     val entries: List<EntryItem> = emptyList(),
@@ -119,6 +127,27 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     fun setDraft(value: String) = _uiState.update { it.copy(draft = value) }
 
     fun notifyHint(text: String, isError: Boolean = false) = showNotice(text, isError = isError)
+
+    fun addAttachment(context: Context, uri: Uri, isImage: Boolean, fallbackName: String = "附件") {
+        val name = resolveDisplayName(context, uri) ?: fallbackName
+        val att = PendingAttachment(
+            id = UUID.randomUUID().toString(),
+            uriString = uri.toString(),
+            name = name,
+            isImage = isImage,
+        )
+        _uiState.update { s ->
+            if (s.pendingAttachments.size >= 4) {
+                s.copy(notice = PaceNotice(text = "单次最多附加 4 个图片或文件", isError = true))
+            } else {
+                s.copy(pendingAttachments = s.pendingAttachments + att)
+            }
+        }
+    }
+
+    fun removeAttachment(id: String) {
+        _uiState.update { s -> s.copy(pendingAttachments = s.pendingAttachments.filterNot { it.id == id }) }
+    }
 
     fun finalizeVoiceInput(candidates: List<String>) {
         val primary = candidates.firstOrNull()?.trim().orEmpty()
@@ -326,14 +355,17 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     fun sendMessage() {
         val state = _uiState.value
         val text = state.draft.trim()
-        if (text.isBlank() || state.streaming) return
+        val attachments = state.pendingAttachments
+        if ((text.isBlank() && attachments.isEmpty()) || state.streaming) return
 
+        val appContext = getApplication<Application>().applicationContext
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             var sessionId = _uiState.value.activeSessionId
             if (sessionId == null) {
                 try {
-                    val created = repository.createSession(title = text.take(24))
+                    val titleSeed = text.ifBlank { attachments.firstOrNull()?.name.orEmpty() }.take(24)
+                    val created = repository.createSession(title = titleSeed)
                     sessionId = created.id
                     repository.saveLastSessionId(sessionId)
                     _uiState.update {
@@ -348,24 +380,72 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
+            val imageUrls = mutableListOf<String>()
+            val uploadedLines = mutableListOf<String>()
+            try {
+                for (att in attachments) {
+                    val uri = Uri.parse(att.uriString)
+                    if (att.isImage) {
+                        val dataUrl = withContext(Dispatchers.IO) { encodeImageAsDataUrl(appContext, uri) }
+                            ?: throw IllegalStateException("无法读取图片 ${att.name}")
+                        imageUrls += dataUrl
+                    } else {
+                        val bytes = withContext(Dispatchers.IO) {
+                            appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        } ?: throw IllegalStateException("无法读取文件 ${att.name}")
+                        if (bytes.size > 10 * 1024 * 1024) {
+                            throw IllegalStateException("文件 ${att.name} 超过 10 MB 上限")
+                        }
+                        val uploaded = repository.uploadFileBytes(att.name, bytes)
+                        uploadedLines += "[附件文件已上传至服务器：${uploaded.hostPath}（原文件名：${uploaded.name}）]"
+                    }
+                }
+            } catch (e: Exception) {
+                showNotice(e.toDisplayMessage(), isError = true)
+                return@launch
+            }
+
+            val finalMessage = buildString {
+                if (uploadedLines.isNotEmpty()) {
+                    append(uploadedLines.joinToString("\n"))
+                    if (text.isNotBlank()) append("\n\n")
+                }
+                if (text.isNotBlank()) {
+                    append(text)
+                } else if (imageUrls.isNotEmpty()) {
+                    append("请查看我发送的图片。")
+                } else if (uploadedLines.isNotEmpty()) {
+                    append("请查看我上传的附件文件。")
+                }
+            }
+
+            val displaySummary = buildString {
+                if (attachments.isNotEmpty()) {
+                    append(attachments.joinToString(" ") { if (it.isImage) "[图片:${it.name}]" else "[文件:${it.name}]" })
+                    if (text.isNotBlank()) append("\n")
+                }
+                append(text)
+            }
+
             val userMsgId = "local_u_${UUID.randomUUID()}"
             val assistantMsgId = "local_a_${UUID.randomUUID()}"
             _uiState.update {
                 it.copy(
                     draft = "",
+                    pendingAttachments = emptyList(),
                     streaming = true,
                     activeRunId = null,
                     toolActivities = emptyList(),
                     pendingApproval = null,
                     messages = it.messages + listOf(
-                        ChatMessage(id = userMsgId, role = "user", content = text),
+                        ChatMessage(id = userMsgId, role = "user", content = displaySummary),
                         ChatMessage(id = assistantMsgId, role = "assistant", content = "", isStreaming = true),
                     ),
                 )
             }
 
             try {
-                repository.streamChat(sessionId, text).collect { event ->
+                repository.streamChat(sessionId, finalMessage, imageUrls).collect { event ->
                     when (event) {
                         is ChatStreamEvent.RunStarted -> _uiState.update { it.copy(activeRunId = event.runId) }
                         is ChatStreamEvent.AssistantDelta -> {
@@ -734,6 +814,37 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
+
+    private fun resolveDisplayName(context: Context, uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        } ?: uri.lastPathSegment
+    }.getOrNull()
+
+    private fun encodeImageAsDataUrl(context: Context, uri: Uri): String? = runCatching {
+        val resolver = context.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        val maxDim = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+        val sample = (maxDim / 1600).coerceAtLeast(1)
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val decoded = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+            ?: return@runCatching null
+        val scale = minOf(1f, 1600f / maxOf(decoded.width, decoded.height).coerceAtLeast(1))
+        val target = if (scale < 0.99f) {
+            Bitmap.createScaledBitmap(
+                decoded,
+                (decoded.width * scale).toInt().coerceAtLeast(1),
+                (decoded.height * scale).toInt().coerceAtLeast(1),
+                true,
+            )
+        } else decoded
+        val out = ByteArrayOutputStream()
+        target.compress(Bitmap.CompressFormat.JPEG, 84, out)
+        if (target !== decoded) decoded.recycle()
+        target.recycle()
+        "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    }.getOrNull()
 
     private fun Throwable.toDisplayMessage(): String {
         if (this is ApiException) {

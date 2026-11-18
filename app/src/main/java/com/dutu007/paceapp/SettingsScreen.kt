@@ -154,6 +154,87 @@ fun AppBackButton(onClick: () -> Unit, enabled: Boolean = true) {
     }
 }
 
+val CameraIcon = ImageVector.Builder(
+    name = "Camera",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(
+        fill = null,
+        stroke = SolidColor(Color.Black),
+        strokeLineWidth = 1.8f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ) {
+        moveTo(4f, 8f); lineTo(7.5f, 8f); lineTo(9f, 5f); lineTo(15f, 5f); lineTo(16.5f, 8f); lineTo(20f, 8f)
+        lineTo(20f, 19f); lineTo(4f, 19f); close()
+        moveTo(15.2f, 13.5f)
+        arcTo(3.2f, 3.2f, 0f, true, true, 8.8f, 13.5f)
+        arcTo(3.2f, 3.2f, 0f, true, true, 15.2f, 13.5f); close()
+    }
+}.build()
+
+val PlusIcon = ImageVector.Builder(
+    name = "Plus",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(
+        fill = null,
+        stroke = SolidColor(Color.Black),
+        strokeLineWidth = 2f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ) {
+        moveTo(12f, 5f); lineTo(12f, 19f)
+        moveTo(5f, 12f); lineTo(19f, 12f)
+    }
+}.build()
+
+val GalleryIcon = ImageVector.Builder(
+    name = "Gallery",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(
+        fill = null,
+        stroke = SolidColor(Color.Black),
+        strokeLineWidth = 1.8f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ) {
+        moveTo(4f, 5f); lineTo(20f, 5f); lineTo(20f, 19f); lineTo(4f, 19f); close()
+        moveTo(4f, 16f); lineTo(9f, 11f); lineTo(14f, 15.5f); lineTo(16.5f, 13f); lineTo(20f, 16.5f)
+    }
+}.build()
+
+val FileDocIcon = ImageVector.Builder(
+    name = "FileDoc",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(
+        fill = null,
+        stroke = SolidColor(Color.Black),
+        strokeLineWidth = 1.8f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ) {
+        moveTo(6f, 3f); lineTo(14f, 3f); lineTo(18f, 7f); lineTo(18f, 21f); lineTo(6f, 21f); close()
+        moveTo(14f, 3f); lineTo(14f, 7f); lineTo(18f, 7f)
+        moveTo(9f, 12f); lineTo(15f, 12f)
+        moveTo(9f, 16f); lineTo(13f, 16f)
+    }
+}.build()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
