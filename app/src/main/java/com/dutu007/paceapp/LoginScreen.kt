@@ -1,9 +1,11 @@
 package com.dutu007.paceapp
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,7 +19,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.dutu007.paceapp.ui.theme.PacePalette
 
 @Composable
 fun LoginScreen(
@@ -46,32 +48,39 @@ fun LoginScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(Color(0xFFE7F2F5), Color(0xFFF6F8F9), Color(0xFFFFFFFF)),
+                    listOf(Color(0xFFE4F0F4), PacePalette.Background, Color(0xFFFFFFFF)),
                 ),
             )
             .imePadding()
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
-        ElevatedCard(
+        Surface(
             modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(26.dp),
+            color = PacePalette.Card,
+            border = BorderStroke(1.dp, PacePalette.CardBorder),
+            tonalElevation = 2.dp,
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.padding(26.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Text(
-                    text = "Pace",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = "连接服务器上的 Hermes 个人助手",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Surface(
+                        color = PacePalette.Primary,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("P", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                        }
+                    }
+                    Column {
+                        Text("Pace", style = MaterialTheme.typography.titleLarge, color = PacePalette.TextPrimary)
+                        Text("Hermes 对话 · 随手记 · 同步文档", style = MaterialTheme.typography.bodySmall, color = PacePalette.TextSecondary)
+                    }
+                }
 
                 val notice = state.notice
                 if (notice != null) {
@@ -82,11 +91,7 @@ fun LoginScreen(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = { onDismissNotice(notice.id) },
                     ) {
-                        Text(
-                            text = notice.text,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        Text(notice.text, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
@@ -115,7 +120,7 @@ fun LoginScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(2.dp))
 
                 Button(
                     onClick = onSubmit,
@@ -130,7 +135,7 @@ fun LoginScreen(
                             color = MaterialTheme.colorScheme.onPrimary,
                         )
                     } else {
-                        Text("登录")
+                        Text("进入空间", fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

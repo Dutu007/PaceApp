@@ -26,6 +26,7 @@ type authConfig struct {
 	PasswordSHA256 string
 	SigningSecret  []byte
 	TokenTTL       time.Duration
+	HermesAPIKey   string
 }
 
 type tokenClaims struct {
@@ -73,6 +74,15 @@ func (a authConfig) checkCredentials(username, password string) bool {
 	}
 
 	return userOK && passOK
+}
+
+func (a authConfig) checkHermesKey(provided string) bool {
+	if strings.TrimSpace(a.HermesAPIKey) == "" || strings.TrimSpace(provided) == "" {
+		return false
+	}
+	expected := sha256.Sum256([]byte(strings.TrimSpace(a.HermesAPIKey)))
+	actual := sha256.Sum256([]byte(strings.TrimSpace(provided)))
+	return subtle.ConstantTimeCompare(expected[:], actual[:]) == 1
 }
 
 func (a authConfig) issueToken(now time.Time) (string, time.Time, error) {
@@ -130,6 +140,11 @@ func (a authConfig) sign(encodedPayload string) string {
 
 func (s *server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hermesKey := r.Header.Get("X-Hermes-Key"); hermesKey != "" && s.auth.checkHermesKey(hermesKey) {
+			ctx := context.WithValue(r.Context(), userContextKey, "hermes")
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		raw := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		if raw == "" {
 			errorJSON(w, http.StatusUnauthorized, "unauthorized")

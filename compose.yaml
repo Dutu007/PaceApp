@@ -3,11 +3,17 @@ name: pace-app
 services:
   api:
     image: ghcr.io/dutu007/paceapp-api:${IMAGE_TAG:-latest}
+    user: "1001:1001"
     mem_limit: 128m
     mem_reservation: 64m
     restart: unless-stopped
     environment:
       LISTEN_ADDR: :8080
+      DATABASE_HOST: shared-postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB:?POSTGRES_DB is required}
+      DATABASE_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       AUTH_USERNAME: ${AUTH_USERNAME:?AUTH_USERNAME is required}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       AUTH_PASSWORD_SHA256: ${AUTH_PASSWORD_SHA256:-}
@@ -16,10 +22,14 @@ services:
       HERMES_BASE_URL: ${HERMES_BASE_URL:-http://host.docker.internal:8642}
       HERMES_API_KEY: ${HERMES_API_KEY:?HERMES_API_KEY is required}
       TOKEN_TTL_DAYS: ${TOKEN_TTL_DAYS:-90}
+      ASSISTANT_DATA_DIR: /data/assistant
+      HERMES_MEMORY_FILE: /data/hermes/MEMORY.md
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./apks:/data/apks:ro
+      - /home/dutu/workspace/personal-assistant/data:/data/assistant:rw
+      - /home/dutu/.hermes/memories/MEMORY.md:/data/hermes/MEMORY.md:ro
     ports:
       - "127.0.0.1:8081:8080"
     healthcheck:
@@ -28,11 +38,15 @@ services:
       timeout: 5s
       retries: 5
     networks:
+      database:
       edge:
         aliases:
           - paceapp-api
 
 networks:
+  database:
+    external: true
+    name: shared-db
   edge:
     external: true
     name: zengdeming-edge

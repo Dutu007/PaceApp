@@ -16,6 +16,22 @@ import (
 
 var safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
+const paceSystemPrompt = "你正在通过用户的个人手机应用 PaceApp 与用户对话。\n" +
+	"1. 用户的个人记录文档位于 /home/dutu/workspace/personal-assistant/data/（包含 diary/、notes/、images/running/notes.json、sleep/）。\n" +
+	"2. PaceApp 后端（http://127.0.0.1:8081）也提供个人数据库记录接口 /api/v1/entries（请求头携带 X-Hermes-Key）。当用户要求“记住某句话”、“存进数据库”或“加入待办”时，除了文字回复外，也可以按用户要求写入文档或调用该接口保存到数据库。\n" +
+	"3. 当用户要求你在软件中“展示”、“整理成清单/表格/统计/卡片”或查看某类记录时，请尽量在回复末尾附带一个结构化展示块（使用 ```pace-card 代码块），PaceApp 客户端会把它渲染为原生交互卡片并允许用户固定到看板：\n" +
+	"```pace-card\n" +
+	`{
+  "type": "checklist | stats | table | note",
+  "title": "卡片标题",
+  "subtitle": "副标题（可选）",
+  "items": [{"label": "条目内容", "done": false, "detail": "补充说明"}],
+  "metrics": [{"label": "指标名", "value": "数值", "unit": "单位"}],
+  "columns": ["列1", "列2"],
+  "rows": [["值1", "值2"]],
+  "content": "note 类型的正文"
+}` + "\n```"
+
 type hermesClient struct {
 	baseURL string
 	apiKey  string
@@ -76,6 +92,23 @@ func writeUpstreamJSON(w http.ResponseWriter, status int, data []byte, err error
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(data)
+}
+
+func enrichChatBody(rawBody []byte) []byte {
+	payload := map[string]any{}
+	if err := json.Unmarshal(rawBody, &payload); err != nil {
+		return rawBody
+	}
+	if _, has := payload["system_message"]; !has {
+		if _, hasInstr := payload["instructions"]; !hasInstr {
+			payload["system_message"] = paceSystemPrompt
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return rawBody
+	}
+	return encoded
 }
 
 func (s *server) hermesHealth(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +224,8 @@ func (s *server) sessionChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
-	status, data, err := s.hermes.doJSON(r.Context(), http.MethodPost, "/api/sessions/"+url.PathEscape(id)+"/chat", rawBody)
+	enriched := enrichChatBody(rawBody)
+	status, data, err := s.hermes.doJSON(r.Context(), http.MethodPost, "/api/sessions/"+url.PathEscape(id)+"/chat", enriched)
 	writeUpstreamJSON(w, status, data, err)
 }
 
@@ -206,8 +240,9 @@ func (s *server) sessionChatStream(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
+	enriched := enrichChatBody(rawBody)
 	upstreamURL := s.hermes.baseURL + "/api/sessions/" + url.PathEscape(id) + "/chat/stream"
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(rawBody))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(enriched))
 	if err != nil {
 		errorJSON(w, http.StatusBadGateway, "hermes_unreachable")
 		return
@@ -231,7 +266,6 @@ func (s *server) sessionChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Disable global write deadline for long-running SSE streams.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")

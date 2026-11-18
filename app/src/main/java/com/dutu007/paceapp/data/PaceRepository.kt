@@ -10,9 +10,11 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.parameter
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.prepareGet
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
@@ -31,6 +33,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -72,14 +75,10 @@ private data class SessionDto(
 )
 
 @Serializable
-private data class SessionListDto(
-    val data: List<SessionDto> = emptyList(),
-)
+private data class SessionListDto(val data: List<SessionDto> = emptyList())
 
 @Serializable
-private data class SessionCreateResponseDto(
-    val session: SessionDto,
-)
+private data class SessionCreateResponseDto(val session: SessionDto)
 
 @Serializable
 private data class MessageDto(
@@ -93,9 +92,73 @@ private data class MessageDto(
 )
 
 @Serializable
-private data class MessageListDto(
-    val data: List<MessageDto> = emptyList(),
+private data class MessageListDto(val data: List<MessageDto> = emptyList())
+
+@Serializable
+private data class EntryDto(
+    val id: String,
+    val kind: String = "note",
+    val title: String = "",
+    val content: String = "",
+    val tags: List<String> = emptyList(),
+    val completed: Boolean = false,
+    val pinned: Boolean = false,
+    val source: String = "app",
+    @SerialName("doc_path") val docPath: String? = null,
+    @SerialName("card_json") val cardJson: JsonObject? = null,
+    @SerialName("created_at") val createdAt: String = "",
+    @SerialName("updated_at") val updatedAt: String = "",
 )
+
+@Serializable
+private data class EntryListDto(val items: List<EntryDto> = emptyList())
+
+@Serializable
+private data class CreateEntryRequestDto(
+    val kind: String,
+    val title: String = "",
+    val content: String,
+    val tags: List<String> = emptyList(),
+    val pinned: Boolean = false,
+    @SerialName("sync_doc") val syncDoc: String = "",
+    @SerialName("doc_path") val docPath: String = "",
+    @SerialName("card_json") val cardJson: JsonObject? = null,
+)
+
+@Serializable
+private data class UpdateEntryRequestDto(
+    val completed: Boolean? = null,
+    val pinned: Boolean? = null,
+    val content: String? = null,
+    val title: String? = null,
+)
+
+@Serializable
+private data class DocSummaryDto(
+    val path: String,
+    val category: String = "note",
+    val title: String = "",
+    val preview: String = "",
+    val editable: Boolean = false,
+    val size: Long = 0,
+    @SerialName("updated_at") val updatedAt: String = "",
+)
+
+@Serializable
+private data class DocListDto(val items: List<DocSummaryDto> = emptyList())
+
+@Serializable
+private data class DocDetailDto(
+    val path: String,
+    val category: String = "note",
+    val title: String = "",
+    val content: String = "",
+    val editable: Boolean = false,
+    @SerialName("updated_at") val updatedAt: String = "",
+)
+
+@Serializable
+private data class SaveDocRequestDto(val path: String, val content: String)
 
 @Serializable
 private data class ErrorDto(val error: String)
@@ -151,9 +214,7 @@ class PaceRepository(context: Context) {
     }
 
     suspend fun signOut() {
-        runCatching {
-            client.post("$baseUrl/api/v1/auth/logout") { auth() }.check()
-        }
+        runCatching { client.post("$baseUrl/api/v1/auth/logout") { auth() }.check() }
         clearSession()
     }
 
@@ -164,8 +225,11 @@ class PaceRepository(context: Context) {
         }.getOrDefault(false)
     }
 
-    suspend fun listSessions(): List<SessionItem> {
-        val dto = client.get("$baseUrl/api/v1/sessions") { auth() }.bodyChecked<SessionListDto>()
+    suspend fun listSessions(source: String? = null): List<SessionItem> {
+        val dto = client.get("$baseUrl/api/v1/sessions") {
+            auth()
+            if (!source.isNullOrBlank()) parameter("source", source)
+        }.bodyChecked<SessionListDto>()
         return dto.data.map { it.toDomain() }
     }
 
@@ -257,12 +321,8 @@ class PaceRepository(context: Context) {
                             eventName = "message"
                             dataBuffer.setLength(0)
                         }
-                        line.startsWith(":") -> {
-                            // Keepalive comment; ignore.
-                        }
-                        line.startsWith("event:") -> {
-                            eventName = line.removePrefix("event:").trim()
-                        }
+                        line.startsWith(":") -> {}
+                        line.startsWith("event:") -> eventName = line.removePrefix("event:").trim()
                         line.startsWith("data:") -> {
                             if (dataBuffer.isNotEmpty()) dataBuffer.append('\n')
                             dataBuffer.append(line.removePrefix("data:").trimStart())
@@ -284,6 +344,73 @@ class PaceRepository(context: Context) {
 
     suspend fun stopRun(runId: String) {
         client.post("$baseUrl/api/v1/runs/$runId/stop") { auth() }.check()
+    }
+
+    suspend fun listEntries(kind: String? = null, query: String? = null): List<EntryItem> {
+        val dto = client.get("$baseUrl/api/v1/entries") {
+            auth()
+            if (!kind.isNullOrBlank() && kind != "all") parameter("kind", kind)
+            if (!query.isNullOrBlank()) parameter("q", query.trim())
+        }.bodyChecked<EntryListDto>()
+        return dto.items.map { it.toDomain() }
+    }
+
+    suspend fun createEntry(
+        kind: String,
+        title: String,
+        content: String,
+        tags: List<String>,
+        pinned: Boolean = false,
+        syncDoc: String = "",
+        docPath: String = "",
+        cardJson: JsonObject? = null,
+    ): EntryItem {
+        val dto = client.post("$baseUrl/api/v1/entries") {
+            auth()
+            jsonBody(CreateEntryRequestDto(kind, title, content, tags, pinned, syncDoc, docPath, cardJson))
+        }.bodyChecked<EntryDto>()
+        return dto.toDomain()
+    }
+
+    suspend fun updateEntry(
+        id: String,
+        completed: Boolean? = null,
+        pinned: Boolean? = null,
+        content: String? = null,
+    ): EntryItem {
+        val dto = client.patch("$baseUrl/api/v1/entries/$id") {
+            auth()
+            jsonBody(UpdateEntryRequestDto(completed = completed, pinned = pinned, content = content))
+        }.bodyChecked<EntryDto>()
+        return dto.toDomain()
+    }
+
+    suspend fun deleteEntry(id: String) {
+        client.delete("$baseUrl/api/v1/entries/$id") { auth() }.check()
+    }
+
+    suspend fun listDocs(category: String? = null): List<DocSummary> {
+        val dto = client.get("$baseUrl/api/v1/docs") {
+            auth()
+            if (!category.isNullOrBlank() && category != "all") parameter("category", category)
+        }.bodyChecked<DocListDto>()
+        return dto.items.map { DocSummary(it.path, it.category, it.title, it.preview, it.editable, it.size, it.updatedAt) }
+    }
+
+    suspend fun getDoc(path: String): DocDetail {
+        val dto = client.get("$baseUrl/api/v1/docs/content") {
+            auth()
+            parameter("path", path)
+        }.bodyChecked<DocDetailDto>()
+        return DocDetail(dto.path, dto.category, dto.title, dto.content, dto.editable, dto.updatedAt)
+    }
+
+    suspend fun saveDoc(path: String, content: String): DocDetail {
+        val dto = client.put("$baseUrl/api/v1/docs/content") {
+            auth()
+            jsonBody(SaveDocRequestDto(path, content))
+        }.bodyChecked<DocDetailDto>()
+        return DocDetail(dto.path, dto.category, dto.title, dto.content, dto.editable, dto.updatedAt)
     }
 
     suspend fun latestRelease(): AppRelease {
@@ -326,9 +453,24 @@ class PaceRepository(context: Context) {
         }
     }
 
+    private fun EntryDto.toDomain() = EntryItem(
+        id = id,
+        kind = kind,
+        title = title,
+        content = content,
+        tags = tags,
+        completed = completed,
+        pinned = pinned,
+        source = source,
+        docPath = docPath,
+        card = cardJson?.let { PaceCardParser.parseCardObject(it) },
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+    )
+
     private fun SessionDto.toDomain() = SessionItem(
         id = id,
-        title = title?.takeIf { it.isNotBlank() } ?: "未命名对话",
+        title = title?.takeIf { it.isNotBlank() } ?: "新对话",
         source = source.orEmpty(),
         messageCount = messageCount,
         lastActive = lastActive,

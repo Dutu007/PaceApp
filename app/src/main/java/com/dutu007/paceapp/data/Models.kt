@@ -1,5 +1,7 @@
 package com.dutu007.paceapp.data
 
+import kotlinx.serialization.json.JsonObject
+
 data class UserProfile(
     val username: String,
     val displayName: String,
@@ -44,6 +46,64 @@ data class AppRelease(
     val notes: String,
     val sha256: String,
     val size: Long,
+)
+
+data class PaceCardItem(
+    val label: String,
+    val done: Boolean = false,
+    val detail: String = "",
+)
+
+data class PaceCardMetric(
+    val label: String,
+    val value: String,
+    val unit: String = "",
+)
+
+data class PaceCardData(
+    val type: String,
+    val title: String,
+    val subtitle: String = "",
+    val items: List<PaceCardItem> = emptyList(),
+    val metrics: List<PaceCardMetric> = emptyList(),
+    val columns: List<String> = emptyList(),
+    val rows: List<List<String>> = emptyList(),
+    val content: String = "",
+    val rawJson: JsonObject? = null,
+)
+
+data class EntryItem(
+    val id: String,
+    val kind: String,
+    val title: String,
+    val content: String,
+    val tags: List<String>,
+    val completed: Boolean,
+    val pinned: Boolean,
+    val source: String,
+    val docPath: String?,
+    val card: PaceCardData?,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+data class DocSummary(
+    val path: String,
+    val category: String,
+    val title: String,
+    val preview: String,
+    val editable: Boolean,
+    val size: Long,
+    val updatedAt: String,
+)
+
+data class DocDetail(
+    val path: String,
+    val category: String,
+    val title: String,
+    val content: String,
+    val editable: Boolean,
+    val updatedAt: String,
 )
 
 sealed interface ChatStreamEvent {
