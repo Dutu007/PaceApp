@@ -114,7 +114,7 @@ func (d *docStore) list() ([]docSummary, error) {
 			Title:     title,
 			Preview:   previewForDoc(ext, raw, info.Size()),
 			MimeType:  mimeTypeForExt(ext),
-			Editable:  ext == ".md" && (strings.HasPrefix(relSlash, "notes/") || strings.HasPrefix(relSlash, "diary/")),
+			Editable:  (ext == ".md" || ext == ".txt") && (strings.HasPrefix(relSlash, "notes/") || strings.HasPrefix(relSlash, "diary/")),
 			Size:      info.Size(),
 			UpdatedAt: info.ModTime().In(d.tz).Format(time.RFC3339),
 		})
@@ -186,7 +186,7 @@ func (d *docStore) read(relPath string) (docContentResponse, error) {
 		Content:      contentText,
 		MimeType:     mimeTypeForExt(ext),
 		RawAvailable: true,
-		Editable:     ext == ".md" && (strings.HasPrefix(clean, "notes/") || strings.HasPrefix(clean, "diary/")),
+		Editable:     (ext == ".md" || ext == ".txt") && (strings.HasPrefix(clean, "notes/") || strings.HasPrefix(clean, "diary/")),
 		UpdatedAt:    info.ModTime().In(d.tz).Format(time.RFC3339),
 	}, nil
 }
@@ -196,7 +196,8 @@ func (d *docStore) write(relPath, content string) (docContentResponse, error) {
 	if err != nil {
 		return docContentResponse{}, err
 	}
-	if !strings.HasSuffix(strings.ToLower(clean), ".md") ||
+	lowerClean := strings.ToLower(clean)
+	if (!strings.HasSuffix(lowerClean, ".md") && !strings.HasSuffix(lowerClean, ".txt")) ||
 		(!strings.HasPrefix(clean, "notes/") && !strings.HasPrefix(clean, "diary/")) {
 		return docContentResponse{}, errors.New("doc_not_writable")
 	}

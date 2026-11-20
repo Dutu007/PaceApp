@@ -1,5 +1,6 @@
 package com.dutu007.paceapp
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -21,7 +22,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -62,6 +65,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.dutu007.paceapp.data.GraphEdgeItem
 import com.dutu007.paceapp.data.GraphNodeItem
 import com.dutu007.paceapp.data.KnowledgeGraphData
@@ -291,6 +296,7 @@ fun KnowledgeGraphExplorer(
     var activeFilter by remember { mutableStateOf("all") }
     var selectedNodeId by remember { mutableStateOf<String?>(null) }
     var inspectSheetNode by remember { mutableStateOf<GraphNodeItem?>(null) }
+    var isFullscreen by remember { mutableStateOf(false) }
 
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     var zoomScale by remember { mutableFloatStateOf(0.78f) }
@@ -337,479 +343,604 @@ fun KnowledgeGraphExplorer(
         }.map { it.id }.toSet()
     }
 
-    Column(modifier = modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Filter chips strip
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            GraphCategoryFilters.forEach { (key, label) ->
-                val selected = activeFilter == key
-                val accent = GraphCategoryColors[key] ?: Color(0xFF38BDF8)
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = if (selected) accent.copy(alpha = 0.16f) else PacePalette.Card,
-                    border = BorderStroke(1.dp, if (selected) accent else PacePalette.CardBorder),
-                    modifier = Modifier.clickable { activeFilter = key },
-                ) {
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (selected) PacePalette.TextPrimary else PacePalette.TextSecondary,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
-                    )
+    @Composable
+    fun renderGraphWorkspace(fullscreenMode: Boolean, containerModifier: Modifier) {
+        Column(modifier = containerModifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Filter chips strip
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GraphCategoryFilters.forEach { (key, label) ->
+                    val selected = activeFilter == key
+                    val accent = GraphCategoryColors[key] ?: Color(0xFF38BDF8)
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (selected) accent.copy(alpha = if (fullscreenMode) 0.24f else 0.16f)
+                        else if (fullscreenMode) Color(0xFF132234) else PacePalette.Card,
+                        border = BorderStroke(1.dp, if (selected) accent else if (fullscreenMode) Color(0xFF28415C) else PacePalette.CardBorder),
+                        modifier = Modifier.clickable {
+                            activeFilter = key
+                            if (key == "all") selectedNodeId = null
+                        },
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (fullscreenMode) Color(0xFFE2E8F0)
+                            else if (selected) PacePalette.TextPrimary else PacePalette.TextSecondary,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                        )
+                    }
                 }
             }
-        }
 
-        // Beautified Interactive Starlight Slate Canvas
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            shape = RoundedCornerShape(22.dp),
-            border = BorderStroke(1.dp, Color(0xFF23364D)),
-            color = Color(0xFF0D1623),
-        ) {
-            Box(
+            // Beautified Interactive Starlight Slate Canvas
+            Surface(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .onSizeChanged { canvasSize = it },
+                    .fillMaxWidth()
+                    .weight(1f),
+                shape = RoundedCornerShape(if (fullscreenMode) 16.dp else 22.dp),
+                border = BorderStroke(1.dp, Color(0xFF23364D)),
+                color = Color(0xFF0D1623),
             ) {
-                val curLayout = layout
-                if (curLayout == null) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFF38BDF8))
-                } else {
-                    val selectedNeighbors = selectedNodeId?.let { id ->
-                        curLayout.neighbors[id]?.map { it.first.id }?.toSet().orEmpty() + id
-                    } ?: emptySet()
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onSizeChanged { canvasSize = it },
+                ) {
+                    val curLayout = layout
+                    if (curLayout == null) {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFF38BDF8))
+                    } else {
+                        val selectedNeighbors = selectedNodeId?.let { id ->
+                            curLayout.neighbors[id]?.map { it.first.id }?.toSet().orEmpty() + id
+                        } ?: emptySet()
 
-                    Canvas(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(curLayout) {
-                                detectTransformGestures { centroid, pan, zoom, _ ->
-                                    val center = Offset(size.width / 2f, size.height / 2f)
-                                    val oldZoom = zoomScale
-                                    val newZoom = (oldZoom * zoom).coerceIn(0.36f, 2.8f)
-                                    val scaleChange = newZoom / oldZoom
-                                    val cShift = centroid - center - panOffset
-                                    panOffset = panOffset + pan + cShift * (1f - scaleChange)
-                                    zoomScale = newZoom
+                        Canvas(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(curLayout) {
+                                    detectTransformGestures { centroid, pan, zoom, _ ->
+                                        val center = Offset(size.width / 2f, size.height / 2f)
+                                        val oldZoom = zoomScale
+                                        val newZoom = (oldZoom * zoom).coerceIn(0.36f, 2.8f)
+                                        val scaleChange = newZoom / oldZoom
+                                        val cShift = centroid - center - panOffset
+                                        panOffset = panOffset + pan + cShift * (1f - scaleChange)
+                                        zoomScale = newZoom
+                                    }
                                 }
-                            }
-                            .pointerInput(curLayout, zoomScale, panOffset) {
-                                detectTapGestures { tap ->
-                                    val center = Offset(size.width / 2f, size.height / 2f)
-                                    val worldTap = (tap - center - panOffset) / zoomScale
-                                    var hit: GraphNodeItem? = null
-                                    var bestDist = Float.MAX_VALUE
-                                    for (node in safeGraph.nodes) {
-                                        val p = curLayout.positions[node.id] ?: continue
-                                        val d = hypot(worldTap.x - p.x, worldTap.y - p.y)
-                                        val hitR = radiusForNode(node) + (24f / zoomScale)
-                                        if (d <= hitR && d < bestDist) {
-                                            bestDist = d
-                                            hit = node
+                                .pointerInput(curLayout, zoomScale, panOffset) {
+                                    detectTapGestures { tap ->
+                                        val center = Offset(size.width / 2f, size.height / 2f)
+                                        val worldTap = (tap - center - panOffset) / zoomScale
+                                        var hit: GraphNodeItem? = null
+                                        var bestDist = Float.MAX_VALUE
+                                        for (node in safeGraph.nodes) {
+                                            val p = curLayout.positions[node.id] ?: continue
+                                            val d = hypot(worldTap.x - p.x, worldTap.y - p.y)
+                                            val hitR = radiusForNode(node) + (24f / zoomScale)
+                                            if (d <= hitR && d < bestDist) {
+                                                bestDist = d
+                                                hit = node
+                                            }
+                                        }
+                                        if (hit != null) {
+                                            selectedNodeId = hit.id
+                                            inspectSheetNode = hit
+                                        } else {
+                                            selectedNodeId = null
+                                            activeFilter = "all"
                                         }
                                     }
-                                    if (hit != null) {
-                                        selectedNodeId = hit.id
-                                        inspectSheetNode = hit
-                                    } else {
-                                        selectedNodeId = null
-                                    }
+                                },
+                        ) {
+                            val center = Offset(size.width / 2f, size.height / 2f)
+
+                            // Deep radial ambient background
+                            drawRect(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(Color(0xFF16273B), Color(0xFF0C141F)),
+                                    center = center,
+                                    radius = maxOf(size.width, size.height) * 0.72f,
+                                ),
+                            )
+
+                            // Subtle spatial dot matrix
+                            val spacing = (56f * zoomScale).coerceIn(28f, 96f)
+                            val offX = ((center.x + panOffset.x) % spacing + spacing) % spacing
+                            val offY = ((center.y + panOffset.y) % spacing + spacing) % spacing
+                            var gx = offX
+                            while (gx < size.width) {
+                                var gy = offY
+                                while (gy < size.height) {
+                                    drawCircle(
+                                        color = Color(0xFF29415A).copy(alpha = 0.28f),
+                                        radius = 1.3f,
+                                        center = Offset(gx, gy),
+                                    )
+                                    gy += spacing
                                 }
+                                gx += spacing
+                            }
+
+                            fun toScreen(world: Offset): Offset = center + panOffset + world * zoomScale
+
+                            // Draw curved Bezier edges
+                            for (edge in safeGraph.edges) {
+                                val wA = curLayout.positions[edge.source] ?: continue
+                                val wB = curLayout.positions[edge.target] ?: continue
+                                val sA = toScreen(wA)
+                                val sB = toScreen(wB)
+
+                                val touchesSelection = selectedNodeId != null &&
+                                    (edge.source == selectedNodeId || edge.target == selectedNodeId)
+                                val matchesFilter = edge.source in matchedIds && edge.target in matchedIds
+                                val alpha = when {
+                                    selectedNodeId != null -> if (touchesSelection) 0.88f else 0.08f
+                                    !matchesFilter -> 0.10f
+                                    edge.kind == "linked_doc" || edge.kind == "tagged" -> 0.48f
+                                    else -> 0.26f
+                                }
+                                val edgeColor = when {
+                                    touchesSelection -> Color(0xFF38BDF8)
+                                    edge.kind == "linked_doc" -> Color(0xFF2DD4BF)
+                                    edge.kind == "tagged" -> Color(0xFFF472B6)
+                                    edge.kind == "memory_section" -> Color(0xFFF59E0B)
+                                    else -> Color(0xFF64748B)
+                                }
+
+                                val mid = Offset((sA.x + sB.x) / 2f, (sA.y + sB.y) / 2f)
+                                val dx = sB.x - sA.x
+                                val dy = sB.y - sA.y
+                                val bend = 0.14f
+                                val ctrl = Offset(mid.x - dy * bend, mid.y + dx * bend)
+
+                                val path = Path().apply {
+                                    moveTo(sA.x, sA.y)
+                                    quadraticTo(ctrl.x, ctrl.y, sB.x, sB.y)
+                                }
+                                drawPath(
+                                    path = path,
+                                    color = edgeColor.copy(alpha = alpha),
+                                    style = Stroke(
+                                        width = (if (touchesSelection) 2.8f else 1.4f),
+                                        cap = StrokeCap.Round,
+                                    ),
+                                )
+                            }
+
+                            // Draw nodes & clean pill labels
+                            val showDetailLabels = zoomScale >= 0.56f
+                            for (node in safeGraph.nodes) {
+                                val worldPos = curLayout.positions[node.id] ?: continue
+                                val sPos = toScreen(worldPos)
+                                if (sPos.x < -140f || sPos.x > size.width + 140f || sPos.y < -140f || sPos.y > size.height + 140f) {
+                                    continue
+                                }
+
+                                val baseColor = colorForNodeKind(node.kind, node.category)
+                                val isSelected = node.id == selectedNodeId
+                                val isNeighbor = node.id in selectedNeighbors
+                                val isMatched = node.id in matchedIds
+                                val nodeAlpha = when {
+                                    selectedNodeId != null -> if (isNeighbor) 1f else 0.22f
+                                    isMatched -> 1f
+                                    else -> 0.22f
+                                }
+                                val r = radiusForNode(node) * zoomScale.coerceIn(0.62f, 1.35f)
+
+                                // Soft outer halo
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(
+                                            baseColor.copy(alpha = (if (isSelected) 0.52f else 0.26f) * nodeAlpha),
+                                            Color.Transparent,
+                                        ),
+                                        center = sPos,
+                                        radius = r * (if (isSelected) 2.5f else 1.9f),
+                                    ),
+                                    radius = r * (if (isSelected) 2.5f else 1.9f),
+                                    center = sPos,
+                                )
+
+                                // Inner core node
+                                drawCircle(
+                                    color = baseColor.copy(alpha = nodeAlpha),
+                                    radius = r,
+                                    center = sPos,
+                                )
+                                drawCircle(
+                                    color = Color.White.copy(alpha = (if (isSelected) 0.95f else 0.45f) * nodeAlpha),
+                                    radius = r,
+                                    center = sPos,
+                                    style = Stroke(width = if (isSelected) 3.2f else 1.4f),
+                                )
+
+                                val shouldDrawLabel = node.kind == "root" || node.kind == "hub" || isSelected || isNeighbor || showDetailLabels
+                                if (shouldDrawLabel && nodeAlpha > 0.2f) {
+                                    val shortTitle = if (node.label.length > 14) node.label.take(13) + "…" else node.label
+                                    val measured = textMeasurer.measure(
+                                        text = shortTitle,
+                                        style = TextStyle(
+                                            color = Color(0xFFEAF2FA).copy(alpha = nodeAlpha),
+                                            fontSize = if (node.kind == "root" || node.kind == "hub") 12.sp else 10.5.sp,
+                                            fontWeight = if (node.kind == "root" || node.kind == "hub" || isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        ),
+                                    )
+                                    val tx = sPos.x - measured.size.width / 2f
+                                    val ty = sPos.y + r + 5f
+                                    drawRoundRect(
+                                        color = Color(0xFF0A121C).copy(alpha = 0.72f * nodeAlpha),
+                                        topLeft = Offset(tx - 6f, ty - 2f),
+                                        size = androidx.compose.ui.geometry.Size(
+                                            measured.size.width + 12f,
+                                            measured.size.height + 4f,
+                                        ),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f),
+                                    )
+                                    drawText(
+                                        textLayoutResult = measured,
+                                        topLeft = Offset(tx, ty),
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Top-left stats / filter hint badge
+                    val statusHint = if (activeFilter != "all" || selectedNodeId != null) {
+                        "筛选中 · 点空白处返回全部"
+                    } else {
+                        "${safeGraph.stats.nodeCount} 节点 · ${safeGraph.stats.edgeCount} 关联"
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = Color(0xFF0E1928).copy(alpha = 0.86f),
+                        border = BorderStroke(1.dp, Color(0xFF28415C)),
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(10.dp)
+                            .widthIn(max = 200.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable(enabled = activeFilter != "all" || selectedNodeId != null) {
+                                activeFilter = "all"
+                                selectedNodeId = null
                             },
                     ) {
-                        val center = Offset(size.width / 2f, size.height / 2f)
-
-                        // Deep radial ambient background
-                        drawRect(
-                            brush = Brush.radialGradient(
-                                colors = listOf(Color(0xFF16273B), Color(0xFF0C141F)),
-                                center = center,
-                                radius = maxOf(size.width, size.height) * 0.72f,
-                            ),
+                        Text(
+                            text = statusHint,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (activeFilter != "all" || selectedNodeId != null) Color(0xFF7DD3FC) else Color(0xFFBFD3E6),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         )
-
-                        // Subtle spatial dot matrix
-                        val spacing = (56f * zoomScale).coerceIn(28f, 96f)
-                        val offX = ((center.x + panOffset.x) % spacing + spacing) % spacing
-                        val offY = ((center.y + panOffset.y) % spacing + spacing) % spacing
-                        var gx = offX
-                        while (gx < size.width) {
-                            var gy = offY
-                            while (gy < size.height) {
-                                drawCircle(
-                                    color = Color(0xFF29415A).copy(alpha = 0.28f),
-                                    radius = 1.3f,
-                                    center = Offset(gx, gy),
-                                )
-                                gy += spacing
-                            }
-                            gx += spacing
-                        }
-
-                        fun toScreen(world: Offset): Offset = center + panOffset + world * zoomScale
-
-                        // Draw curved Bezier edges
-                        for (edge in safeGraph.edges) {
-                            val wA = curLayout.positions[edge.source] ?: continue
-                            val wB = curLayout.positions[edge.target] ?: continue
-                            val sA = toScreen(wA)
-                            val sB = toScreen(wB)
-
-                            val touchesSelection = selectedNodeId != null &&
-                                (edge.source == selectedNodeId || edge.target == selectedNodeId)
-                            val matchesFilter = edge.source in matchedIds && edge.target in matchedIds
-                            val alpha = when {
-                                selectedNodeId != null -> if (touchesSelection) 0.88f else 0.08f
-                                !matchesFilter -> 0.10f
-                                edge.kind == "linked_doc" || edge.kind == "tagged" -> 0.48f
-                                else -> 0.26f
-                            }
-                            val edgeColor = when {
-                                touchesSelection -> Color(0xFF38BDF8)
-                                edge.kind == "linked_doc" -> Color(0xFF2DD4BF)
-                                edge.kind == "tagged" -> Color(0xFFF472B6)
-                                edge.kind == "memory_section" -> Color(0xFFF59E0B)
-                                else -> Color(0xFF64748B)
-                            }
-
-                            val mid = Offset((sA.x + sB.x) / 2f, (sA.y + sB.y) / 2f)
-                            val dx = sB.x - sA.x
-                            val dy = sB.y - sA.y
-                            val bend = 0.14f
-                            val ctrl = Offset(mid.x - dy * bend, mid.y + dx * bend)
-
-                            val path = Path().apply {
-                                moveTo(sA.x, sA.y)
-                                quadraticTo(ctrl.x, ctrl.y, sB.x, sB.y)
-                            }
-                            drawPath(
-                                path = path,
-                                color = edgeColor.copy(alpha = alpha),
-                                style = Stroke(
-                                    width = (if (touchesSelection) 2.8f else 1.4f),
-                                    cap = StrokeCap.Round,
-                                ),
-                            )
-                        }
-
-                        // Draw nodes & clean pill labels
-                        val showDetailLabels = zoomScale >= 0.56f
-                        for (node in safeGraph.nodes) {
-                            val worldPos = curLayout.positions[node.id] ?: continue
-                            val sPos = toScreen(worldPos)
-                            if (sPos.x < -140f || sPos.x > size.width + 140f || sPos.y < -140f || sPos.y > size.height + 140f) {
-                                continue
-                            }
-
-                            val baseColor = colorForNodeKind(node.kind, node.category)
-                            val isSelected = node.id == selectedNodeId
-                            val isNeighbor = node.id in selectedNeighbors
-                            val isMatched = node.id in matchedIds
-                            val nodeAlpha = when {
-                                selectedNodeId != null -> if (isNeighbor) 1f else 0.22f
-                                isMatched -> 1f
-                                else -> 0.22f
-                            }
-                            val r = radiusForNode(node) * zoomScale.coerceIn(0.62f, 1.35f)
-
-                            // Soft outer halo
-                            drawCircle(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        baseColor.copy(alpha = (if (isSelected) 0.52f else 0.26f) * nodeAlpha),
-                                        Color.Transparent,
-                                    ),
-                                    center = sPos,
-                                    radius = r * (if (isSelected) 2.5f else 1.9f),
-                                ),
-                                radius = r * (if (isSelected) 2.5f else 1.9f),
-                                center = sPos,
-                            )
-
-                            // Inner core node
-                            drawCircle(
-                                color = baseColor.copy(alpha = nodeAlpha),
-                                radius = r,
-                                center = sPos,
-                            )
-                            drawCircle(
-                                color = Color.White.copy(alpha = (if (isSelected) 0.95f else 0.45f) * nodeAlpha),
-                                radius = r,
-                                center = sPos,
-                                style = Stroke(width = if (isSelected) 3.2f else 1.4f),
-                            )
-
-                            val shouldDrawLabel = node.kind == "root" || node.kind == "hub" || isSelected || isNeighbor || showDetailLabels
-                            if (shouldDrawLabel && nodeAlpha > 0.2f) {
-                                val shortTitle = if (node.label.length > 14) node.label.take(13) + "…" else node.label
-                                val measured = textMeasurer.measure(
-                                    text = shortTitle,
-                                    style = TextStyle(
-                                        color = Color(0xFFEAF2FA).copy(alpha = nodeAlpha),
-                                        fontSize = if (node.kind == "root" || node.kind == "hub") 12.sp else 10.5.sp,
-                                        fontWeight = if (node.kind == "root" || node.kind == "hub" || isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                    ),
-                                )
-                                val tx = sPos.x - measured.size.width / 2f
-                                val ty = sPos.y + r + 5f
-                                drawRoundRect(
-                                    color = Color(0xFF0A121C).copy(alpha = 0.72f * nodeAlpha),
-                                    topLeft = Offset(tx - 6f, ty - 2f),
-                                    size = androidx.compose.ui.geometry.Size(
-                                        measured.size.width + 12f,
-                                        measured.size.height + 4f,
-                                    ),
-                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f),
-                                )
-                                drawText(
-                                    textLayoutResult = measured,
-                                    topLeft = Offset(tx, ty),
-                                )
-                            }
-                        }
                     }
-                }
 
-                // Top-left stats badge
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = Color(0xFF0E1928).copy(alpha = 0.84f),
-                    border = BorderStroke(1.dp, Color(0xFF28415C)),
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(12.dp),
-                ) {
-                    Text(
-                        text = "${safeGraph.stats.nodeCount} 节点 · ${safeGraph.stats.edgeCount} 关联 · 点击节点展开",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFBFD3E6),
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    )
-                }
-
-                // Top-right refresh pill
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = Color(0xFF0E1928).copy(alpha = 0.84f),
-                    border = BorderStroke(1.dp, Color(0xFF28415C)),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(12.dp)
-                        .clip(RoundedCornerShape(999.dp))
-                        .clickable { onRefresh() },
-                ) {
-                    Text(
-                        text = if (loading) "同步中..." else "刷新图谱",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF7DD3FC),
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    )
-                }
-
-                // Bottom-right Zoom & Reset controls
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    GraphHudButton("+") { zoomScale = (zoomScale * 1.25f).coerceAtMost(2.8f) }
-                    GraphHudButton("−") { zoomScale = (zoomScale * 0.8f).coerceAtLeast(0.36f) }
-                    GraphHudButton("⟲") {
-                        zoomScale = 0.78f
-                        panOffset = Offset.Zero
-                        selectedNodeId = null
-                    }
-                }
-
-                // Bottom-left compact color legend
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF0E1928).copy(alpha = 0.82f),
-                    border = BorderStroke(1.dp, Color(0xFF253B52)),
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(12.dp),
-                ) {
+                    // Top-right refresh & fullscreen toggle pills
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        LegendDot(Color(0xFFF59E0B), "记忆")
-                        LegendDot(Color(0xFF2DD4BF), "笔记")
-                        LegendDot(Color(0xFFA78BFA), "日记")
-                        LegendDot(Color(0xFFFB7185), "文档")
-                        LegendDot(Color(0xFFF472B6), "标签")
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = Color(0xFF0E1928).copy(alpha = 0.86f),
+                            border = BorderStroke(1.dp, Color(0xFF28415C)),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .clickable { onRefresh() },
+                        ) {
+                            Text(
+                                text = if (loading) "同步中" else "刷新",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF7DD3FC),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = Color(0xFF12324B).copy(alpha = 0.92f),
+                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.65f)),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .clickable { isFullscreen = !fullscreenMode },
+                        ) {
+                            Text(
+                                text = if (fullscreenMode) "退出全屏" else "全屏",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
+
+                    // Bottom-right Zoom & Reset controls
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        GraphHudButton("+") { zoomScale = (zoomScale * 1.25f).coerceAtMost(2.8f) }
+                        GraphHudButton("−") { zoomScale = (zoomScale * 0.8f).coerceAtLeast(0.36f) }
+                        GraphHudButton("⟲") {
+                            zoomScale = 0.78f
+                            panOffset = Offset.Zero
+                            selectedNodeId = null
+                            activeFilter = "all"
+                        }
+                    }
+
+                    // Bottom-left compact color legend
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF0E1928).copy(alpha = 0.84f),
+                        border = BorderStroke(1.dp, Color(0xFF253B52)),
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(10.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            LegendDot(Color(0xFFF59E0B), "记忆")
+                            LegendDot(Color(0xFF2DD4BF), "笔记")
+                            LegendDot(Color(0xFFA78BFA), "日记")
+                            LegendDot(Color(0xFFFB7185), "文档")
+                            LegendDot(Color(0xFFF472B6), "标签")
+                        }
                     }
                 }
             }
         }
     }
 
-    // Expandable Node Inspection BottomSheet
-    inspectSheetNode?.let { node ->
-        val curLayout = layout
-        val neighbors = curLayout?.neighbors?.get(node.id).orEmpty()
-        val accent = colorForNodeKind(node.kind, node.category)
+    renderGraphWorkspace(
+        fullscreenMode = false,
+        containerModifier = modifier.fillMaxSize(),
+    )
 
-        ModalBottomSheet(
-            onDismissRequest = { inspectSheetNode = null },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            containerColor = PacePalette.Card,
+    if (!isFullscreen) {
+        inspectSheetNode?.let { node ->
+            GraphNodeInspectSheet(
+                node = node,
+                layout = layout,
+                onDismiss = { inspectSheetNode = null },
+                onJumpNeighbor = { nb, targetWorld ->
+                    selectedNodeId = nb.id
+                    inspectSheetNode = nb
+                    if (targetWorld != null) {
+                        panOffset = -targetWorld * zoomScale
+                    }
+                },
+                onFocusCategory = { cat ->
+                    activeFilter = cat
+                    inspectSheetNode = null
+                },
+                onOpenDoc = { path, title ->
+                    inspectSheetNode = null
+                    isFullscreen = false
+                    onOpenDoc(path, title)
+                },
+                onAskHermes = { targetNode ->
+                    val targetDesc = targetNode.docPath.ifBlank { targetNode.label }
+                    inspectSheetNode = null
+                    isFullscreen = false
+                    onAskHermes("请帮我查看并整理知识库中与「${targetNode.label}」（$targetDesc）相关的记录和脉络，如果有值得串联的灵感请一并归纳。")
+                },
+            )
+        }
+    }
+
+    if (isFullscreen) {
+        Dialog(
+            onDismissRequest = { isFullscreen = false },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false,
+            ),
         ) {
-            Column(
+            BackHandler { isFullscreen = false }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0A111A))
+                    .systemBarsPadding()
+                    .padding(10.dp),
+            ) {
+                renderGraphWorkspace(
+                    fullscreenMode = true,
+                    containerModifier = Modifier.fillMaxSize(),
+                )
+            }
+            inspectSheetNode?.let { node ->
+                GraphNodeInspectSheet(
+                    node = node,
+                    layout = layout,
+                    onDismiss = { inspectSheetNode = null },
+                    onJumpNeighbor = { nb, targetWorld ->
+                        selectedNodeId = nb.id
+                        inspectSheetNode = nb
+                        if (targetWorld != null) {
+                            panOffset = -targetWorld * zoomScale
+                        }
+                    },
+                    onFocusCategory = { cat ->
+                        activeFilter = cat
+                        inspectSheetNode = null
+                    },
+                    onOpenDoc = { path, title ->
+                        inspectSheetNode = null
+                        isFullscreen = false
+                        onOpenDoc(path, title)
+                    },
+                    onAskHermes = { targetNode ->
+                        val targetDesc = targetNode.docPath.ifBlank { targetNode.label }
+                        inspectSheetNode = null
+                        isFullscreen = false
+                        onAskHermes("请帮我查看并整理知识库中与「${targetNode.label}」（$targetDesc）相关的记录和脉络，如果有值得串联的灵感请一并归纳。")
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun GraphNodeInspectSheet(
+    node: GraphNodeItem,
+    layout: GraphLayoutResult?,
+    onDismiss: () -> Unit,
+    onJumpNeighbor: (GraphNodeItem, Offset?) -> Unit,
+    onFocusCategory: (String) -> Unit,
+    onOpenDoc: (String, String) -> Unit,
+    onAskHermes: (GraphNodeItem) -> Unit,
+) {
+    val neighbors = layout?.neighbors?.get(node.id).orEmpty()
+    val accent = colorForNodeKind(node.kind, node.category)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = PacePalette.Card,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    color = accent.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text(
+                        text = labelForNodeKind(node.kind, node.category),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+                Text(
+                    text = node.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (node.updatedAt.isNotBlank()) {
+                    Text(
+                        text = node.updatedAt.take(10),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PacePalette.TextSecondary,
+                    )
+                }
+            }
+
+            if (node.subtitle.isNotBlank() || node.docPath.isNotBlank()) {
+                Text(
+                    text = node.docPath.ifBlank { node.subtitle },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = PacePalette.TextSecondary,
+                )
+            }
+
+            if (node.preview.isNotBlank()) {
+                Surface(
+                    color = PacePalette.Background,
+                    border = BorderStroke(1.dp, PacePalette.CardBorder),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = node.preview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+            }
+
+            if (neighbors.isNotEmpty()) {
+                Text(
+                    text = "关联节点 (${neighbors.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = PacePalette.TextSecondary,
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    neighbors.take(16).forEach { (nb, relLabel) ->
+                        val nbColor = colorForNodeKind(nb.kind, nb.category)
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = nbColor.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, nbColor.copy(alpha = 0.35f)),
+                            modifier = Modifier.clickable {
+                                onJumpNeighbor(nb, layout?.positions?.get(nb.id))
+                            },
+                        ) {
+                            Text(
+                                text = if (relLabel.isNotBlank()) "${nb.label} · $relLabel" else nb.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = PacePalette.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 8.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(top = 4.dp, bottom = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Surface(
-                        color = accent.copy(alpha = 0.16f),
-                        shape = RoundedCornerShape(8.dp),
-                    ) {
-                        Text(
-                            text = labelForNodeKind(node.kind, node.category),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = accent,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        )
-                    }
-                    Text(
-                        text = node.label,
-                        style = MaterialTheme.typography.titleMedium,
+                if (node.docPath.isNotBlank()) {
+                    OutlinedButton(
+                        onClick = { onOpenDoc(node.docPath, node.label) },
                         modifier = Modifier.weight(1f),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (node.updatedAt.isNotBlank()) {
-                        Text(
-                            text = node.updatedAt.take(10),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = PacePalette.TextSecondary,
-                        )
-                    }
-                }
-
-                if (node.subtitle.isNotBlank() || node.docPath.isNotBlank()) {
-                    Text(
-                        text = node.docPath.ifBlank { node.subtitle },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = PacePalette.TextSecondary,
-                    )
-                }
-
-                if (node.preview.isNotBlank()) {
-                    Surface(
-                        color = PacePalette.Background,
-                        border = BorderStroke(1.dp, PacePalette.CardBorder),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(
-                            text = node.preview,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(12.dp),
-                        )
+                        Text("打开查看内容")
                     }
-                }
-
-                // Connected Neighbor Pills (tap to jump & expand neighbor!)
-                if (neighbors.isNotEmpty()) {
-                    Text(
-                        text = "关联节点 (${neighbors.size})",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = PacePalette.TextSecondary,
-                    )
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                } else if (node.kind == "hub") {
+                    OutlinedButton(
+                        onClick = { onFocusCategory(node.category) },
+                        modifier = Modifier.weight(1f),
                     ) {
-                        neighbors.take(16).forEach { (nb, relLabel) ->
-                            val nbColor = colorForNodeKind(nb.kind, nb.category)
-                            Surface(
-                                shape = RoundedCornerShape(999.dp),
-                                color = nbColor.copy(alpha = 0.12f),
-                                border = BorderStroke(1.dp, nbColor.copy(alpha = 0.35f)),
-                                modifier = Modifier.clickable {
-                                    selectedNodeId = nb.id
-                                    inspectSheetNode = nb
-                                    curLayout?.positions?.get(nb.id)?.let { targetWorld ->
-                                        panOffset = -targetWorld * zoomScale
-                                    }
-                                },
-                            ) {
-                                Text(
-                                    text = if (relLabel.isNotBlank()) "${nb.label} · $relLabel" else nb.label,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = PacePalette.TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                )
-                            }
-                        }
+                        Text("聚焦该分类")
                     }
                 }
 
-                // Actions
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp, bottom = 14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                Button(
+                    onClick = { onAskHermes(node) },
+                    modifier = Modifier.weight(1.25f),
                 ) {
-                    if (node.docPath.isNotBlank()) {
-                        OutlinedButton(
-                            onClick = {
-                                val path = node.docPath
-                                val title = node.label
-                                inspectSheetNode = null
-                                onOpenDoc(path, title)
-                            },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text("打开查看内容")
-                        }
-                    } else if (node.kind == "hub") {
-                        OutlinedButton(
-                            onClick = {
-                                activeFilter = node.category
-                                inspectSheetNode = null
-                            },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text("聚焦该分类")
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            val targetDesc = node.docPath.ifBlank { node.label }
-                            inspectSheetNode = null
-                            onAskHermes("请帮我查看并整理知识库中与「${node.label}」（$targetDesc）相关的记录和脉络，如果有值得串联的灵感请一并归纳。")
-                        },
-                        modifier = Modifier.weight(1.25f),
-                    ) {
-                        Text("让 Hermes 分析")
-                    }
+                    Text("让 Hermes 分析")
                 }
             }
         }

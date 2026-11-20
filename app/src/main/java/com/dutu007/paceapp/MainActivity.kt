@@ -30,12 +30,14 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -44,8 +46,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -160,60 +160,88 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
             Scaffold(
                 containerColor = PacePalette.Background,
                 topBar = {
-                    TopAppBar(
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = PacePalette.Card),
-                        title = {
-                            val dotColor = when (state.hermesOnline) {
-                                true -> PacePalette.Success
-                                false -> MaterialTheme.colorScheme.error
-                                null -> Color(0xFF9AA0A6)
-                            }
-                            if (state.currentTab == PaceTab.CHAT) {
+                    val dotColor = when (state.hermesOnline) {
+                        true -> PacePalette.Success
+                        false -> MaterialTheme.colorScheme.error
+                        null -> Color(0xFF9AA0A6)
+                    }
+                    Surface(color = PacePalette.Card) {
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .statusBarsPadding()
+                                    .height(44.dp)
+                                    .padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                    if (state.currentTab == PaceTab.CHAT) {
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable { showSessionSheet = true }
+                                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                        ) {
+                                            Box(Modifier.size(7.dp).clip(CircleShape).background(dotColor))
+                                            Text(
+                                                text = "${activeSession?.title ?: "新对话"} ▾",
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.titleSmall,
+                                            )
+                                        }
+                                    } else {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                        ) {
+                                            Text(
+                                                text = if (state.currentTab == PaceTab.ENTRIES) "记录与看板" else "知识库",
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.titleSmall,
+                                            )
+                                            Box(Modifier.size(7.dp).clip(CircleShape).background(dotColor))
+                                        }
+                                    }
+                                }
                                 Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .clickable { showSessionSheet = true }
-                                        .padding(horizontal = 4.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                                 ) {
-                                    Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
-                                    Text(
-                                        text = "${activeSession?.title ?: "新对话"} ▾",
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        style = MaterialTheme.typography.titleMedium,
-                                    )
-                                }
-                            } else {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Text(
-                                        text = if (state.currentTab == PaceTab.ENTRIES) "记录与看板" else "文档空间",
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                    Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
-                                }
-                            }
-                        },
-                        actions = {
-                            if (state.currentTab == PaceTab.CHAT) {
-                                TextButton(onClick = viewModel::startNewSession, enabled = !state.streaming) {
-                                    Text("+ 新建", color = PacePalette.Primary)
-                                }
-                            } else {
-                                IconButton(onClick = viewModel::refreshAll, enabled = !state.streaming) {
-                                    Icon(RefreshIcon, contentDescription = "刷新", tint = PacePalette.Primary)
+                                    if (state.currentTab == PaceTab.CHAT) {
+                                        TextButton(
+                                            onClick = viewModel::startNewSession,
+                                            enabled = !state.streaming,
+                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                            modifier = Modifier.height(32.dp),
+                                        ) {
+                                            Text("+ 新建", color = PacePalette.Primary, fontSize = 13.sp)
+                                        }
+                                    } else {
+                                        IconButton(
+                                            onClick = viewModel::refreshAll,
+                                            enabled = !state.streaming,
+                                            modifier = Modifier.size(34.dp),
+                                        ) {
+                                            Icon(RefreshIcon, contentDescription = "刷新", tint = PacePalette.Primary, modifier = Modifier.size(19.dp))
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { showSettings = true },
+                                        modifier = Modifier.size(34.dp),
+                                    ) {
+                                        Icon(SettingsIcon, contentDescription = "设置", tint = PacePalette.Primary, modifier = Modifier.size(19.dp))
+                                    }
                                 }
                             }
-                            IconButton(onClick = { showSettings = true }) {
-                                Icon(SettingsIcon, contentDescription = "设置", tint = PacePalette.Primary)
-                            }
-                        },
-                    )
+                            HorizontalDivider(thickness = 0.5.dp, color = PacePalette.CardBorder)
+                        }
+                    }
                 },
                 bottomBar = {
                     if (!imeVisible) {
@@ -263,7 +291,8 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
                     doc = doc,
                     busy = state.docBusy,
                     onBack = viewModel::closeDoc,
-                    onSave = { updated -> viewModel.saveDoc(doc.path, updated) },
+                    onSave = { updated, onDone -> viewModel.saveDoc(doc.path, updated, onDone) },
+                    onRefresh = { viewModel.openDoc(doc.path) },
                     onAskHermes = { viewModel.askHermesAboutDoc(doc) },
                 )
             }

@@ -124,7 +124,17 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun selectTab(tab: PaceTab) = _uiState.update { it.copy(currentTab = tab) }
+    fun selectTab(tab: PaceTab) {
+        _uiState.update { it.copy(currentTab = tab) }
+        when (tab) {
+            PaceTab.ENTRIES -> refreshEntries()
+            PaceTab.DOCS -> {
+                refreshDocs()
+                refreshGraph()
+            }
+            PaceTab.CHAT -> Unit
+        }
+    }
     fun setUsername(value: String) = _uiState.update { it.copy(usernameInput = value) }
     fun setPassword(value: String) = _uiState.update { it.copy(passwordInput = value) }
     fun setDraft(value: String) = _uiState.update { it.copy(draft = value) }
@@ -779,8 +789,9 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val updated = repository.saveDoc(path, content)
                 _uiState.update { it.copy(docBusy = false, openedDoc = updated) }
-                showNotice("文档已保存")
+                showNotice("已保存并同步到服务器")
                 refreshDocs()
+                refreshGraph()
                 onSaved()
             } catch (e: Exception) {
                 _uiState.update { it.copy(docBusy = false) }

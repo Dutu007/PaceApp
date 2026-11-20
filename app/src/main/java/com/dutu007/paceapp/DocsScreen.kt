@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -27,6 +29,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -34,8 +37,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,7 +86,7 @@ fun DocsScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -100,7 +101,7 @@ fun DocsScreen(
                         .clickable { viewMode = mode },
                 ) {
                     Box(
-                        modifier = Modifier.padding(vertical = 8.dp),
+                        modifier = Modifier.padding(vertical = 6.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -365,7 +366,8 @@ fun DocDetailOverlay(
     doc: DocDetail,
     busy: Boolean,
     onBack: () -> Unit,
-    onSave: (String) -> Unit,
+    onSave: (String, () -> Unit) -> Unit,
+    onRefresh: () -> Unit = {},
     onAskHermes: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -376,30 +378,57 @@ fun DocDetailOverlay(
         Scaffold(
             containerColor = Color.Transparent,
             topBar = {
-                TopAppBar(
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = PacePalette.Card),
-                    navigationIcon = {
-                        AppBackButton(onClick = onBack)
-                    },
-                    title = {
-                        Text(doc.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                    },
-                    actions = {
-                        if (doc.editable) {
+                Surface(color = PacePalette.Card) {
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .statusBarsPadding()
+                                .height(46.dp)
+                                .padding(horizontal = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            AppBackButton(onClick = onBack)
+                            Text(
+                                doc.title,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f),
+                            )
                             if (editing) {
                                 TextButton(
                                     onClick = {
-                                        onSave(editBuffer)
+                                        editBuffer = doc.content
                                         editing = false
                                     },
                                     enabled = !busy,
-                                ) { Text("保存") }
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                ) { Text("取消") }
+                                TextButton(
+                                    onClick = { onSave(editBuffer) { editing = false } },
+                                    enabled = !busy,
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                ) { Text(if (busy) "同步中..." else "保存") }
                             } else {
-                                TextButton(onClick = { editing = true }) { Text("编辑") }
+                                TextButton(
+                                    onClick = onRefresh,
+                                    enabled = !busy,
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                ) { Text("同步") }
+                                if (doc.editable) {
+                                    TextButton(
+                                        onClick = { editing = true },
+                                        contentPadding = PaddingValues(horizontal = 8.dp),
+                                    ) { Text("编辑") }
+                                }
                             }
                         }
-                    },
-                )
+                        HorizontalDivider(thickness = 0.5.dp, color = PacePalette.CardBorder)
+                    }
+                }
             },
         ) { padding ->
             Column(
@@ -407,22 +436,32 @@ fun DocDetailOverlay(
                     .fillMaxSize()
                     .padding(padding)
                     .imePadding()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        doc.path,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = PacePalette.TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            doc.path,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PacePalette.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = if (doc.editable) {
+                                "直接同步服务器 · ${doc.updatedAt.replace('T', ' ').take(16)}"
+                            } else {
+                                "只读来源 · ${doc.updatedAt.replace('T', ' ').take(16)}"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PacePalette.TextSecondary.copy(alpha = 0.78f),
+                        )
+                    }
                     OutlinedButton(
                         onClick = onAskHermes,
                         shape = RoundedCornerShape(10.dp),
