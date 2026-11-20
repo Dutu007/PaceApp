@@ -446,6 +446,45 @@ class PaceRepository(context: Context) {
         return resp.text.ifBlank { text }
     }
 
+    suspend fun transcribeSpeech(wavBytes: ByteArray, currentDraft: String = ""): String = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        val boundary = "PaceAudio${System.currentTimeMillis()}"
+        val token = preferences.getString("token", "").orEmpty()
+        val url = URL("$baseUrl/api/v1/stt/transcribe")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 45_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+        }
+        try {
+            conn.outputStream.use { out ->
+                if (currentDraft.isNotBlank()) {
+                    val field = "--$boundary\r\nContent-Disposition: form-data; name=\"context\"\r\n\r\n$currentDraft\r\n"
+                    out.write(field.toByteArray(StandardCharsets.UTF_8))
+                }
+                val header = "--$boundary\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"voice.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+                out.write(header.toByteArray(StandardCharsets.UTF_8))
+                out.write(wavBytes)
+                out.write("\r\n--$boundary--\r\n".toByteArray(StandardCharsets.UTF_8))
+                out.flush()
+            }
+            val code = conn.responseCode
+            val raw = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader(StandardCharsets.UTF_8)?.readText().orEmpty()
+            if (code !in 200..299) {
+                val errCode = runCatching { json.decodeFromString<ErrorDto>(raw).error }.getOrNull()
+                throw ApiException(code, errCode ?: "stt_failed")
+            }
+            val dto = json.decodeFromString<SttRefineResponseDto>(raw)
+            dto.text.trim()
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     suspend fun uploadFileBytes(fileName: String, bytes: ByteArray): UploadedFile = kotlinx.coroutines.withContext(Dispatchers.IO) {
         val boundary = "PaceBoundary${System.currentTimeMillis()}"
         val token = preferences.getString("token", "").orEmpty()

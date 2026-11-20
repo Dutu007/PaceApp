@@ -468,6 +468,74 @@ func TestOfficeDocsRawAndKnowledgeGraph(t *testing.T) {
 	}
 }
 
+func TestSttTranscribe(t *testing.T) {
+	sf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audio/transcriptions" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.FormValue("model"); got != "FunAudioLLM/SenseVoiceSmall" {
+			t.Fatalf("unexpected model: %q", got)
+		}
+		_, _ = w.Write([]byte(`{"text":"<|zh|><|NEUTRAL|><|Speech|><|withitn|>帮我让河马斯整理一下日记"}`))
+	}))
+	defer sf.Close()
+
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"帮我让 Hermes 整理一下日记。"}}]}`))
+	}))
+	defer llm.Close()
+
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	srv.stt = newSTTClient(sf.URL, "sf-test-key", "")
+	srv.llm = newLLMClient(llm.URL, "ds-test-key", "deepseek-chat")
+	token, _, _ := srv.auth.issueToken(time.Now())
+
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("context", "")
+	part, _ := mw.CreateFormFile("audio", "voice.wav")
+	_, _ = part.Write(bytes.Repeat([]byte{0x12, 0x34}, 1200))
+	_ = mw.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/stt/transcribe", &body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 transcribe, got %d", resp.StatusCode)
+	}
+	var out struct {
+		Text     string `json:"text"`
+		RawText  string `json:"raw_text"`
+		Refined  bool   `json:"refined"`
+		Provider string `json:"provider"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.RawText != "帮我让河马斯整理一下日记" {
+		t.Fatalf("expected tags stripped raw text, got %q", out.RawText)
+	}
+	if !out.Refined || !strings.Contains(out.Text, "Hermes") || out.Provider != "siliconflow" {
+		t.Fatalf("unexpected transcribe response: %+v", out)
+	}
+}
+
 func newTestZip(buf *bytes.Buffer) *zip.Writer {
 	return zip.NewWriter(buf)
 }

@@ -66,4 +66,16 @@ class AttachmentAndDocHelperTest {
         assertEquals("EXCEL", fileTypeBadge("sheet.xlsx").first)
         assertEquals("PPT", fileTypeBadge("slides.pptx").first)
     }
+
+    @Test
+    fun buildsValid16kMonoWavHeader() {
+        val pcm = ByteArray(3200) { 1 }
+        val wav = buildWavBytes(pcm, sampleRate = 16000)
+
+        assertEquals(44 + 3200, wav.size)
+        assertEquals("RIFF", String(wav, 0, 4, Charsets.US_ASCII))
+        assertEquals("WAVE", String(wav, 8, 4, Charsets.US_ASCII))
+        assertEquals("fmt ", String(wav, 12, 4, Charsets.US_ASCII))
+        assertEquals("data", String(wav, 36, 4, Charsets.US_ASCII))
+    }
 }

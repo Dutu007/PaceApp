@@ -4,11 +4,105 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
+
+var senseVoiceTagRegex = regexp.MustCompile(`<\|[^|\r\n]+\|>`)
+
+type sttClient struct {
+	baseURL string
+	apiKey  string
+	model   string
+	http    *http.Client
+}
+
+func newSTTClient(baseURL, apiKey, model string) *sttClient {
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		return nil
+	}
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = "https://api.siliconflow.cn"
+	}
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	m := strings.TrimSpace(model)
+	if m == "" {
+		m = "FunAudioLLM/SenseVoiceSmall"
+	}
+	return &sttClient{
+		baseURL: base,
+		apiKey:  key,
+		model:   m,
+		http:    &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+func cleanTranscriptText(raw string) string {
+	stripped := senseVoiceTagRegex.ReplaceAllString(raw, " ")
+	return strings.TrimSpace(strings.Join(strings.Fields(stripped), " "))
+}
+
+func (c *sttClient) transcribe(ctx context.Context, filename string, audioBytes []byte) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("stt_not_configured")
+	}
+	if strings.TrimSpace(filename) == "" {
+		filename = "voice.wav"
+	}
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("model", c.model); err != nil {
+		return "", err
+	}
+	part, err := mw.CreateFormFile("file", filepath.Base(filename))
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(audioBytes); err != nil {
+		return "", err
+	}
+	if err := mw.Close(); err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/audio/transcriptions", &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respRaw, err := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("stt_upstream_%d: %s", resp.StatusCode, strings.TrimSpace(string(respRaw)))
+	}
+	var parsed struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(respRaw, &parsed); err != nil {
+		return "", err
+	}
+	return cleanTranscriptText(parsed.Text), nil
+}
 
 type refineSttRequest struct {
 	Text       string   `json:"text"`
@@ -149,4 +243,62 @@ func (s *server) refineStt(w http.ResponseWriter, r *http.Request) {
 	}
 	refined, ok := s.llm.refineSpeech(r.Context(), primary, req.Candidates, req.Context)
 	writeJSON(w, http.StatusOK, refineSttResponse{Text: refined, Refined: ok})
+}
+
+func (s *server) transcribeStt(w http.ResponseWriter, r *http.Request) {
+	if s.stt == nil {
+		errorJSON(w, http.StatusServiceUnavailable, "stt_not_configured")
+		return
+	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(45 * time.Second))
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(45 * time.Second))
+
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<20)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid_audio_upload")
+		return
+	}
+	file, header, err := r.FormFile("audio")
+	if err != nil {
+		file, header, err = r.FormFile("file")
+		if err != nil {
+			errorJSON(w, http.StatusBadRequest, "missing_audio")
+			return
+		}
+	}
+	defer file.Close()
+
+	audioBytes, err := io.ReadAll(io.LimitReader(file, 15<<20))
+	if err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid_audio_upload")
+		return
+	}
+	if len(audioBytes) < 1000 {
+		errorJSON(w, http.StatusBadRequest, "audio_too_short")
+		return
+	}
+
+	rawText, err := s.stt.transcribe(r.Context(), header.Filename, audioBytes)
+	if err != nil {
+		errorJSON(w, http.StatusBadGateway, "stt_upstream_failed")
+		return
+	}
+	if rawText == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"text":     "",
+			"raw_text": "",
+			"refined":  false,
+			"provider": "siliconflow",
+		})
+		return
+	}
+
+	contextDraft := strings.TrimSpace(r.FormValue("context"))
+	finalText, refined := s.llm.refineSpeech(r.Context(), rawText, nil, contextDraft)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"text":     finalText,
+		"raw_text": rawText,
+		"refined":  refined,
+		"provider": "siliconflow",
+	})
 }

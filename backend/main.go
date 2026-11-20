@@ -32,6 +32,7 @@ type server struct {
 	auth    authConfig
 	hermes  *hermesClient
 	llm     *llmClient
+	stt     *sttClient
 	entries entryStore
 	docs    *docStore
 	apkDir  string
@@ -286,6 +287,7 @@ func main() {
 		auth:    auth,
 		hermes:  newHermesClient(hermesBase, hermesKey),
 		llm:     newLLMClient(os.Getenv("DEEPSEEK_BASE_URL"), os.Getenv("DEEPSEEK_API_KEY"), os.Getenv("STT_REFINE_MODEL")),
+		stt:     newSTTClient(os.Getenv("SILICONFLOW_BASE_URL"), os.Getenv("SILICONFLOW_API_KEY"), os.Getenv("STT_ASR_MODEL")),
 		entries: entries,
 		docs:    newDocStore(os.Getenv("ASSISTANT_DATA_DIR"), os.Getenv("HERMES_MEMORY_FILE")),
 		apkDir:  apkDir,
@@ -412,6 +414,7 @@ func (s *server) routes() http.Handler {
 	mux.Handle("POST /api/v1/runs/{id}/approval", s.authMiddleware(http.HandlerFunc(s.runApproval)))
 	mux.Handle("POST /api/v1/runs/{id}/stop", s.authMiddleware(http.HandlerFunc(s.runStop)))
 	mux.Handle("POST /api/v1/stt/refine", s.authMiddleware(http.HandlerFunc(s.refineStt)))
+	mux.Handle("POST /api/v1/stt/transcribe", s.authMiddleware(http.HandlerFunc(s.transcribeStt)))
 
 	mux.Handle("GET /api/v1/entries", s.authMiddleware(http.HandlerFunc(s.listEntries)))
 	mux.Handle("POST /api/v1/entries", s.authMiddleware(http.HandlerFunc(s.createEntry)))

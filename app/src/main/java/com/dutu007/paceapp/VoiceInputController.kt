@@ -1,348 +1,215 @@
 package com.dutu007.paceapp
 
-import android.content.ComponentName
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognitionService
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.core.content.ContextCompat
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.concurrent.thread
+import kotlin.math.sqrt
 
-private sealed interface SpeechCandidate {
-    data class Component(val component: ComponentName, val pkg: String) : SpeechCandidate
-    data object OnDevice : SpeechCandidate
-    data object SystemDefault : SpeechCandidate
-}
+fun buildWavBytes(pcmData: ByteArray, sampleRate: Int = 16000, channels: Int = 1, bitsPerSample: Int = 16): ByteArray {
+    val byteRate = sampleRate * channels * bitsPerSample / 8
+    val blockAlign = channels * bitsPerSample / 8
+    val totalDataLen = pcmData.size
+    val totalChunkLen = 36 + totalDataLen
 
-fun buildSystemSpeechIntent(prompt: String = "请说话，识别后可先编辑再发送"): Intent {
-    return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-CN")
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-        putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
-    }
-}
-
-fun hasSystemSpeechDialog(context: Context): Boolean {
-    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-    return intent.resolveActivity(context.packageManager) != null
+    val out = ByteArray(44 + totalDataLen)
+    val buf = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN)
+    buf.put("RIFF".toByteArray(Charsets.US_ASCII))
+    buf.putInt(totalChunkLen)
+    buf.put("WAVE".toByteArray(Charsets.US_ASCII))
+    buf.put("fmt ".toByteArray(Charsets.US_ASCII))
+    buf.putInt(16) // PCM subchunk size
+    buf.putShort(1) // PCM format = 1
+    buf.putShort(channels.toShort())
+    buf.putInt(sampleRate)
+    buf.putInt(byteRate)
+    buf.putShort(blockAlign.toShort())
+    buf.putShort(bitsPerSample.toShort())
+    buf.put("data".toByteArray(Charsets.US_ASCII))
+    buf.putInt(totalDataLen)
+    System.arraycopy(pcmData, 0, out, 44, totalDataLen)
+    return out
 }
 
 class VoiceInputController(
     private val context: Context,
-    private val onPartial: (String) -> Unit,
-    private val onResult: (List<String>) -> Unit,
+    private val onAmplitude: (Float) -> Unit,
+    private val onAudioReady: (ByteArray) -> Unit,
     private val onError: (String) -> Unit,
-    private val onListeningChanged: (Boolean) -> Unit = {},
-    private val onRequestSystemDialog: (() -> Unit)? = null,
 ) {
-    private var recognizer: SpeechRecognizer? = null
-    private var active = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var recording = false
+    @Volatile
     private var cancelling = false
-    private var ready = false
-    private var heardSpeech = false
-    private var deliveredFinal = false
-    private var remainingCandidates = ArrayDeque<SpeechCandidate>()
-    private var currentCandidate: SpeechCandidate? = null
-    private val disconnectedCandidates = mutableSetOf<SpeechCandidate>()
-
-    private val isOnDeviceSupported: Boolean
-        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
+    private var workerThread: Thread? = null
+    private var startTimeMs = 0L
 
     val isAvailable: Boolean
-        get() = runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false) ||
-            discoverRecognitionServices().isNotEmpty() ||
-            isOnDeviceSupported ||
-            hasSystemSpeechDialog(context)
+        get() = context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
 
     fun start(): Boolean {
-        if (!isAvailable) {
-            onError("当前设备未开启系统语音识别服务")
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            onError("请先授予麦克风权限")
             return false
         }
-        destroyRecognizer()
+        if (recording) return true
+
+        val sampleRate = 16000
+        val minBuf = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
+        if (minBuf <= 0) {
+            onError("当前设备音频录音初始化失败")
+            return false
+        }
+        val bufSize = maxOf(minBuf * 2, sampleRate) // >= 0.5s buffer
+
+        val recorder = createBestAudioRecord(sampleRate, bufSize)
+        if (recorder == null || recorder.state != AudioRecord.STATE_INITIALIZED) {
+            runCatching { recorder?.release() }
+            onError("麦克风被其他应用占用或无法启动录音")
+            return false
+        }
+
         cancelling = false
-        ready = false
-        heardSpeech = false
-        deliveredFinal = false
+        recording = true
+        startTimeMs = System.currentTimeMillis()
 
-        val ordered = buildCandidateOrder()
-        remainingCandidates = ArrayDeque(ordered)
-        if (remainingCandidates.isEmpty()) {
-            if (trySystemDialogFallback()) return true
-            onError("当前设备未检测到可用的语音识别引擎")
-            return false
+        workerThread = thread(start = true, name = "PaceVoiceRecorder") {
+            val pcmStream = ByteArrayOutputStream(sampleRate * 8)
+            val shortBuf = ShortArray(bufSize / 2)
+            val byteBuf = ByteArray(shortBuf.size * 2)
+            val maxBytes = sampleRate * 2 * 90 // cap 90s (~2.88 MB)
+            var peakAmplitude = 0f
+
+            try {
+                recorder.startRecording()
+                while (recording && !cancelling && pcmStream.size() < maxBytes) {
+                    val readShorts = recorder.read(shortBuf, 0, shortBuf.size)
+                    if (readShorts < 0) break
+                    if (readShorts == 0) continue
+
+                    var sumSq = 0.0
+                    var outIdx = 0
+                    for (i in 0 until readShorts) {
+                        val s = shortBuf[i]
+                        val norm = s / 32768.0
+                        sumSq += norm * norm
+                        byteBuf[outIdx++] = (s.toInt() and 0xFF).toByte()
+                        byteBuf[outIdx++] = ((s.toInt() shr 8) and 0xFF).toByte()
+                    }
+                    pcmStream.write(byteBuf, 0, outIdx)
+
+                    val rms = sqrt(sumSq / readShorts).toFloat()
+                    val normalized = (rms * 4.2f).coerceIn(0f, 1f)
+                    if (normalized > peakAmplitude) peakAmplitude = normalized
+                    mainHandler.post {
+                        if (recording && !cancelling) onAmplitude(normalized)
+                    }
+                }
+            } catch (t: Throwable) {
+                if (!cancelling) {
+                    mainHandler.post { onError("录音异常：${t.message ?: "请重试"}") }
+                }
+                cancelling = true
+            } finally {
+                runCatching { recorder.stop() }
+                runCatching { recorder.release() }
+            }
+
+            if (cancelling) {
+                return@thread
+            }
+
+            val pcm = pcmStream.toByteArray()
+            val durationMs = System.currentTimeMillis() - startTimeMs
+            if (durationMs < 350L || pcm.size < 8000) {
+                mainHandler.post { onError("说话时间太短，请按住多说一点") }
+                return@thread
+            }
+            if (peakAmplitude < 0.004f) {
+                mainHandler.post { onError("未检测到有效声音，请靠近麦克风重试") }
+                return@thread
+            }
+
+            val wav = buildWavBytes(pcm, sampleRate = sampleRate)
+            mainHandler.post { onAudioReady(wav) }
         }
-
-        // If every inline candidate already failed with disconnect/unavailable in this session,
-        // skip straight to the interactive system speech dialog when available.
-        if (ordered.all { it in disconnectedCandidates } && hasSystemSpeechDialog(context) && onRequestSystemDialog != null) {
-            active = false
-            onListeningChanged(false)
-            onRequestSystemDialog.invoke()
-            return false
-        }
-
-        return startNextCandidate()
+        return true
     }
 
     fun finish(cancel: Boolean) {
         cancelling = cancel
-        val sr = recognizer
-        active = false
-        onListeningChanged(false)
-        if (sr == null) return
-        if (cancel) {
-            runCatching { sr.cancel() }
-            destroyRecognizer()
-        } else {
-            runCatching { sr.stopListening() }
-        }
+        recording = false
+        onAmplitude(0f)
     }
 
     fun destroy() {
         cancelling = true
-        active = false
-        onListeningChanged(false)
-        destroyRecognizer()
+        recording = false
+        runCatching { workerThread?.join(150) }
+        workerThread = null
     }
 
-    private fun startNextCandidate(): Boolean {
-        destroyRecognizer()
-        while (remainingCandidates.isNotEmpty()) {
-            val candidate = remainingCandidates.removeFirst()
-            currentCandidate = candidate
-            ready = false
-            heardSpeech = false
-            deliveredFinal = false
-
-            val sr = createRecognizerFor(candidate) ?: continue
-            recognizer = sr
-            sr.setRecognitionListener(createListener(candidate))
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-CN")
-                putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-                if (candidate is SpeechCandidate.OnDevice) {
-                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-                }
-            }
-
-            return try {
-                sr.startListening(intent)
-                active = true
-                onListeningChanged(true)
-                true
-            } catch (_: Throwable) {
-                disconnectedCandidates += candidate
-                destroyRecognizer()
-                continue
-            }
-        }
-        active = false
-        onListeningChanged(false)
-        return false
-    }
-
-    private fun createRecognizerFor(candidate: SpeechCandidate): SpeechRecognizer? {
-        return when (candidate) {
-            is SpeechCandidate.Component -> runCatching {
-                SpeechRecognizer.createSpeechRecognizer(context, candidate.component)
+    @SuppressLint("MissingPermission")
+    private fun createBestAudioRecord(sampleRate: Int, bufSize: Int): AudioRecord? {
+        val sources = listOf(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC,
+        )
+        for (src in sources) {
+            val rec = runCatching {
+                AudioRecord(
+                    src,
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufSize,
+                )
             }.getOrNull()
-            is SpeechCandidate.OnDevice -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(context) }.getOrNull()
-            } else {
-                null
+            if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED) {
+                return rec
             }
-            is SpeechCandidate.SystemDefault -> runCatching {
-                SpeechRecognizer.createSpeechRecognizer(context)
-            }.getOrNull()
+            runCatching { rec?.release() }
         }
-    }
-
-    private fun createListener(candidate: SpeechCandidate) = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {
-            ready = true
-        }
-
-        override fun onBeginningOfSpeech() {
-            heardSpeech = true
-        }
-
-        override fun onRmsChanged(rmsdB: Float) = Unit
-        override fun onBufferReceived(buffer: ByteArray?) = Unit
-
-        override fun onEndOfSpeech() {
-            active = false
-            onListeningChanged(false)
-        }
-
-        override fun onPartialResults(partialResults: Bundle?) {
-            if (cancelling) return
-            val first = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-            if (!first.isNullOrBlank()) {
-                heardSpeech = true
-                onPartial(first)
-            }
-        }
-
-        override fun onResults(results: Bundle?) {
-            active = false
-            onListeningChanged(false)
-            if (cancelling) return
-            deliveredFinal = true
-            val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.toList().orEmpty()
-            if (list.isEmpty()) {
-                onError("未识别到清晰语音，请重试")
-            } else {
-                onResult(list)
-            }
-            destroyRecognizer()
-        }
-
-        override fun onError(error: Int) {
-            if (cancelling || deliveredFinal) {
-                active = false
-                onListeningChanged(false)
-                destroyRecognizer()
-                return
-            }
-
-            // Codes 1,2,4,5,11,12,13,14 indicate service disconnected / unreachable / unsupported engine.
-            val isEngineFailure = error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
-                error == SpeechRecognizer.ERROR_NETWORK ||
-                error == SpeechRecognizer.ERROR_SERVER ||
-                error == SpeechRecognizer.ERROR_CLIENT ||
-                error == 11 || error == 12 || error == 13 || error == 14
-
-            if (isEngineFailure) {
-                disconnectedCandidates += candidate
-                if (!heardSpeech && remainingCandidates.isNotEmpty() && (active || !ready)) {
-                    if (startNextCandidate()) {
-                        return
-                    }
-                }
-                active = false
-                onListeningChanged(false)
-                destroyRecognizer()
-                if (!heardSpeech && trySystemDialogFallback()) {
-                    return
-                }
-            } else {
-                active = false
-                onListeningChanged(false)
-                destroyRecognizer()
-            }
-
-            onError(mapRecognitionError(error))
-        }
-
-        override fun onEvent(eventType: Int, params: Bundle?) = Unit
-    }
-
-    private fun trySystemDialogFallback(): Boolean {
-        val cb = onRequestSystemDialog ?: return false
-        if (!hasSystemSpeechDialog(context)) return false
-        cb.invoke()
-        return true
-    }
-
-    private fun buildCandidateOrder(): List<SpeechCandidate> {
-        val services = discoverRecognitionServices()
-        val nonGoogle = mutableListOf<SpeechCandidate>()
-        val google = mutableListOf<SpeechCandidate>()
-        for (comp in services) {
-            val item = SpeechCandidate.Component(comp, comp.packageName)
-            if (comp.packageName.startsWith("com.google.")) {
-                google += item
-            } else {
-                nonGoogle += item
-            }
-        }
-        val list = mutableListOf<SpeechCandidate>()
-        list += nonGoogle
-        if (isOnDeviceSupported) {
-            list += SpeechCandidate.OnDevice
-        }
-        list += SpeechCandidate.SystemDefault
-        list += google
-        return list.sortedBy { if (it in disconnectedCandidates) 1 else 0 }
-    }
-
-    private fun discoverRecognitionServices(): List<ComponentName> {
-        val pm = context.packageManager
-        val intent = Intent(RecognitionService.SERVICE_INTERFACE)
-        val infos = runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.queryIntentServices(intent, PackageManager.ResolveInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.queryIntentServices(intent, 0)
-            }
-        }.getOrDefault(emptyList())
-        return infos.mapNotNull { info ->
-            val svc = info.serviceInfo ?: return@mapNotNull null
-            ComponentName(svc.packageName, svc.name)
-        }
-    }
-
-    private fun mapRecognitionError(error: Int): String = when (error) {
-        SpeechRecognizer.ERROR_AUDIO -> "麦克风录音异常"
-        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "请先授予麦克风权限"
-        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "语音识别网络超时，请轻点麦克风尝试系统语音或使用键盘输入法语音"
-        SpeechRecognizer.ERROR_NO_MATCH -> "未识别到清晰语音，请重试"
-        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "未检测到说话内容"
-        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "语音服务正忙，请稍后再试"
-        10 -> "语音请求过于频繁，请稍后再试"
-        11 -> "系统语音服务未连接 (11)，请轻点麦克风打开系统语音或切换本机语音引擎"
-        12, 13 -> "当前系统语音引擎未安装中文离线语言包 ($error)"
-        else -> "语音识别失败 ($error)"
-    }
-
-    private fun destroyRecognizer() {
-        recognizer?.let { sr ->
-            runCatching { sr.destroy() }
-        }
-        recognizer = null
+        return null
     }
 }
 
 @Composable
 fun rememberVoiceInputController(
     context: Context,
-    onPartial: (String) -> Unit,
-    onResult: (List<String>) -> Unit,
+    onAmplitude: (Float) -> Unit,
+    onAudioReady: (ByteArray) -> Unit,
     onError: (String) -> Unit,
-    onListeningChanged: (Boolean) -> Unit = {},
-    onRequestSystemDialog: (() -> Unit)? = null,
 ): VoiceInputController {
-    val latestPartial = rememberUpdatedState(onPartial)
-    val latestResult = rememberUpdatedState(onResult)
+    val latestAmp = rememberUpdatedState(onAmplitude)
+    val latestReady = rememberUpdatedState(onAudioReady)
     val latestError = rememberUpdatedState(onError)
-    val latestListening = rememberUpdatedState(onListeningChanged)
-    val latestSystemDialog = rememberUpdatedState(onRequestSystemDialog)
 
     val controller = remember(context) {
         VoiceInputController(
             context = context,
-            onPartial = { latestPartial.value(it) },
-            onResult = { latestResult.value(it) },
+            onAmplitude = { latestAmp.value(it) },
+            onAudioReady = { latestReady.value(it) },
             onError = { latestError.value(it) },
-            onListeningChanged = { latestListening.value(it) },
-            onRequestSystemDialog = { latestSystemDialog.value?.invoke() },
         )
     }
     DisposableEffect(controller) {

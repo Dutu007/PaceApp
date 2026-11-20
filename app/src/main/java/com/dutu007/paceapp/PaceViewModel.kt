@@ -203,6 +203,39 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { s -> s.copy(pendingAttachments = s.pendingAttachments.filterNot { it.id == id }) }
     }
 
+    private fun appendTranscriptToDraft(text: String) {
+        val clean = text.trim()
+        if (clean.isEmpty()) return
+        _uiState.update { s ->
+            val prefix = s.draft.trimEnd()
+            val nextDraft = if (prefix.isEmpty()) clean else "$prefix $clean"
+            s.copy(voiceRefining = false, draft = nextDraft)
+        }
+    }
+
+    fun transcribeVoiceAudio(wavBytes: ByteArray) {
+        if (wavBytes.size < 1000) {
+            showNotice("说话时间太短，请重试", isError = true)
+            return
+        }
+        val existingDraft = _uiState.value.draft
+        viewModelScope.launch {
+            _uiState.update { it.copy(voiceRefining = true) }
+            try {
+                val text = repository.transcribeSpeech(wavBytes, existingDraft)
+                if (text.isBlank()) {
+                    _uiState.update { it.copy(voiceRefining = false) }
+                    showNotice("未检测到清晰语音内容，请重试", isError = true)
+                } else {
+                    appendTranscriptToDraft(text)
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(voiceRefining = false) }
+                if (!handleAuthError(e)) showNotice("语音识别失败：${e.toDisplayMessage()}", isError = true)
+            }
+        }
+    }
+
     fun finalizeVoiceInput(candidates: List<String>) {
         val primary = candidates.firstOrNull()?.trim().orEmpty()
         if (primary.isEmpty()) return
@@ -212,11 +245,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             val refined = runCatching {
                 repository.refineSpeech(primary, candidates, existingDraft)
             }.getOrDefault(primary).trim()
-            _uiState.update { s ->
-                val prefix = s.draft.trimEnd()
-                val nextDraft = if (prefix.isEmpty()) refined else "$prefix $refined"
-                s.copy(voiceRefining = false, draft = nextDraft)
-            }
+            appendTranscriptToDraft(refined)
         }
     }
     fun setCaptureText(value: String) = _uiState.update { it.copy(captureText = value) }

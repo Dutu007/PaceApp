@@ -1,11 +1,9 @@
 package com.dutu007.paceapp
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,6 +54,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -369,9 +369,23 @@ private fun DoubaoComposer(
 
     var voiceListening by remember { mutableStateOf(false) }
     var voiceCancelling by remember { mutableStateOf(false) }
-    var voicePartial by remember { mutableStateOf("") }
+    var voiceAmplitude by remember { mutableFloatStateOf(0f) }
+    var voiceElapsedSec by remember { mutableIntStateOf(0) }
     var showAttachmentTray by remember { mutableStateOf(false) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    LaunchedEffect(voiceListening) {
+        if (!voiceListening) {
+            voiceElapsedSec = 0
+            voiceAmplitude = 0f
+            return@LaunchedEffect
+        }
+        voiceElapsedSec = 0
+        while (voiceListening) {
+            kotlinx.coroutines.delay(1000L)
+            if (voiceListening) voiceElapsedSec += 1
+        }
+    }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture(),
@@ -422,39 +436,19 @@ private fun DoubaoComposer(
         }
     }
 
-    val speechDialogLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val texts = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS).orEmpty()
-            if (texts.isNotEmpty()) {
-                viewModel.finalizeVoiceInput(texts)
-            }
-        }
-    }
-
-    val openSystemVoiceDialog: () -> Unit = {
-        voiceListening = false
-        voicePartial = ""
-        runCatching {
-            speechDialogLauncher.launch(buildSystemSpeechIntent())
-        }.onFailure {
-            viewModel.notifyHint("系统语音弹窗不可用，请直接使用键盘语音输入", isError = true)
-        }
-    }
-
     val voiceController = rememberVoiceInputController(
         context = context,
-        onPartial = { voicePartial = it },
-        onResult = { candidates ->
+        onAmplitude = { voiceAmplitude = it },
+        onAudioReady = { wavBytes ->
             voiceListening = false
-            voicePartial = ""
-            viewModel.finalizeVoiceInput(candidates)
+            voiceAmplitude = 0f
+            viewModel.transcribeVoiceAudio(wavBytes)
         },
         onError = { msg ->
             voiceListening = false
-            voicePartial = ""
+            voiceAmplitude = 0f
             viewModel.notifyHint(msg, isError = true)
         },
-        onRequestSystemDialog = openSystemVoiceDialog,
     )
 
     Column(
@@ -480,27 +474,43 @@ private fun DoubaoComposer(
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Column(
+                Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(
                         text = when {
-                            voiceCancelling -> "松开手指取消输入"
-                            state.voiceRefining -> "正在优化语音识别与标点..."
-                            else -> "正在聆听 · 上滑取消 · 松手填入输入框"
+                            voiceCancelling -> "松开手指取消发送"
+                            state.voiceRefining -> "正在识别并优化标点..."
+                            else -> "正在录音 ${voiceElapsedSec}s · 上滑取消 · 松手转文字"
                         },
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = fg,
+                        modifier = Modifier.weight(1f),
                     )
-                    if (voicePartial.isNotBlank() && !voiceCancelling) {
-                        Text(
-                            text = voicePartial,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = fg.copy(alpha = 0.92f),
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
+                    if (voiceListening && !voiceCancelling) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            listOf(0.45f, 0.8f, 1.0f, 0.75f, 0.5f).forEach { weight ->
+                                val barH = (6f + 16f * (voiceAmplitude * weight).coerceIn(0f, 1f)).dp
+                                Box(
+                                    modifier = Modifier
+                                        .width(3.dp)
+                                        .height(barH)
+                                        .clip(RoundedCornerShape(99.dp))
+                                        .background(Color.White.copy(alpha = 0.92f)),
+                                )
+                            }
+                        }
+                    } else if (state.voiceRefining) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = PacePalette.Primary,
                         )
                     }
                 }
@@ -550,7 +560,7 @@ private fun DoubaoComposer(
                         if (!granted) {
                             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         } else {
-                            openSystemVoiceDialog()
+                            viewModel.notifyHint("请长按此处麦克风说话，松手识别填入输入框")
                         }
                         return@awaitEachGesture
                     }
@@ -566,7 +576,7 @@ private fun DoubaoComposer(
                     }
 
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    voicePartial = ""
+                    voiceAmplitude = 0f
                     voiceCancelling = false
                     val started = voiceController.start()
                     if (!started) {
@@ -588,10 +598,8 @@ private fun DoubaoComposer(
                     val shouldCancel = voiceCancelling
                     voiceCancelling = false
                     voiceListening = false
+                    voiceAmplitude = 0f
                     voiceController.finish(cancel = shouldCancel)
-                    if (shouldCancel) {
-                        voicePartial = ""
-                    }
                 }
             },
         ) {
@@ -611,7 +619,7 @@ private fun DoubaoComposer(
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = if (voiceListening) "松手转写" else "按住说话 · 轻点弹窗",
+                    text = if (voiceListening) "松手识别" else "按住说话",
                     style = MaterialTheme.typography.labelMedium,
                     color = when {
                         voiceCancelling -> MaterialTheme.colorScheme.error
