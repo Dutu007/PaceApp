@@ -17,6 +17,7 @@ import com.dutu007.paceapp.data.ChatStreamEvent
 import com.dutu007.paceapp.data.DocDetail
 import com.dutu007.paceapp.data.DocSummary
 import com.dutu007.paceapp.data.EntryItem
+import com.dutu007.paceapp.data.KnowledgeGraphData
 import com.dutu007.paceapp.data.PaceCardData
 import com.dutu007.paceapp.data.PaceRepository
 import com.dutu007.paceapp.data.PendingAttachment
@@ -79,13 +80,15 @@ data class PaceUiState(
     val captureSyncDoc: String = "diary",
     val captureBusy: Boolean = false,
 
-    // Docs state
+    // Docs & Knowledge Graph state
     val docs: List<DocSummary> = emptyList(),
     val docsLoading: Boolean = false,
     val docFilterCategory: String = "all",
     val docSearch: String = "",
     val openedDoc: DocDetail? = null,
     val docBusy: Boolean = false,
+    val graph: KnowledgeGraphData? = null,
+    val graphLoading: Boolean = false,
 
     // Global notice & updates
     val notice: PaceNotice? = null,
@@ -130,11 +133,15 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addAttachment(context: Context, uri: Uri, isImage: Boolean, fallbackName: String = "附件") {
         val name = resolveDisplayName(context, uri) ?: fallbackName
+        val detectedMime = runCatching { context.contentResolver.getType(uri) }.getOrNull().orEmpty()
+        val effectiveImage = isImage || detectedMime.startsWith("image/") || isImageFileName(name)
+        val mime = detectedMime.ifBlank { mimeTypeForFileName(name, fallback = "") }
         val att = PendingAttachment(
             id = UUID.randomUUID().toString(),
             uriString = uri.toString(),
             name = name,
-            isImage = isImage,
+            isImage = effectiveImage,
+            mimeType = mime,
         )
         _uiState.update { s ->
             if (s.pendingAttachments.size >= 4) {
@@ -142,6 +149,43 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 s.copy(pendingAttachments = s.pendingAttachments + att)
             }
+        }
+    }
+
+    fun refreshGraph() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(graphLoading = true) }
+            try {
+                val g = repository.getGraph()
+                _uiState.update { it.copy(graphLoading = false, graph = g) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(graphLoading = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    suspend fun fetchDocDetailOnce(path: String): DocDetail = repository.getDoc(path)
+
+    suspend fun downloadServerDocToCache(path: String, displayName: String): File {
+        val docsDir = File(getApplication<Application>().cacheDir, "docs").apply { mkdirs() }
+        val base = displayName.ifBlank { path.substringAfterLast('/') }
+        val safeName = base.replace(Regex("""[^A-Za-z0-9.\-_\u4E00-\u9FFF]"""), "_").ifBlank { "doc" }
+        val hash = path.hashCode().toUInt().toString(16)
+        val dst = File(docsDir, "${hash}_$safeName")
+        return repository.downloadDocRaw(path, dst)
+    }
+
+    fun askHermesAboutDoc(docPath: String) {
+        askHermesAboutPrompt("请查看并整理我在知识库中的文档 `$docPath`，提取重点并说明和其他记录的联系。")
+    }
+
+    fun askHermesAboutPrompt(prompt: String) {
+        _uiState.update {
+            it.copy(
+                currentTab = PaceTab.CHAT,
+                draft = prompt,
+            )
         }
     }
 
@@ -244,6 +288,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             loadSessionsInternal(autoSelect = true)
             refreshEntries()
             refreshDocs()
+            refreshGraph()
         }
     }
 
@@ -382,6 +427,8 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
 
             val imageUrls = mutableListOf<String>()
             val uploadedLines = mutableListOf<String>()
+            val displayChips = mutableListOf<String>()
+            var uploadedDocCount = 0
             try {
                 for (att in attachments) {
                     val uri = Uri.parse(att.uriString)
@@ -389,25 +436,49 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                         val dataUrl = withContext(Dispatchers.IO) { encodeImageAsDataUrl(appContext, uri) }
                             ?: throw IllegalStateException("无法读取图片 ${att.name}")
                         imageUrls += dataUrl
+                        val cachedThumbUri = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val dir = File(appContext.cacheDir, "sent_images").apply { mkdirs() }
+                                val dst = File(dir, "${System.currentTimeMillis()}_${att.id.take(8)}.jpg")
+                                appContext.contentResolver.openInputStream(uri)?.use { input ->
+                                    dst.outputStream().use { out -> input.copyTo(out) }
+                                }
+                                Uri.fromFile(dst).toString()
+                            }.getOrDefault(att.uriString)
+                        }
+                        displayChips += encodePaceLocalMarkdown(att.name, cachedThumbUri, isImage = true)
                     } else {
                         val bytes = withContext(Dispatchers.IO) {
                             appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         } ?: throw IllegalStateException("无法读取文件 ${att.name}")
-                        if (bytes.size > 10 * 1024 * 1024) {
-                            throw IllegalStateException("文件 ${att.name} 超过 10 MB 上限")
+                        if (bytes.size > 20 * 1024 * 1024) {
+                            throw IllegalStateException("文件 ${att.name} 超过 20 MB 上限")
                         }
                         val uploaded = repository.uploadFileBytes(att.name, bytes)
-                        uploadedLines += "[附件文件已上传至服务器：${uploaded.hostPath}（原文件名：${uploaded.name}）]"
+                        uploadedDocCount++
+                        val extracted = uploaded.extractedText.trim().take(6000)
+                        uploadedLines += buildString {
+                            append("[附件文档已上传至服务器：${uploaded.hostPath}（原文件名：${uploaded.name}）]")
+                            if (extracted.isNotBlank()) {
+                                append("\n文档内容提取：\n")
+                                append(extracted)
+                            }
+                        }
+                        displayChips += encodePaceDocMarkdown(uploaded.name, uploaded.path, isImage = false)
                     }
                 }
             } catch (e: Exception) {
                 showNotice(e.toDisplayMessage(), isError = true)
                 return@launch
             }
+            if (uploadedDocCount > 0) {
+                refreshDocs()
+                refreshGraph()
+            }
 
             val finalMessage = buildString {
                 if (uploadedLines.isNotEmpty()) {
-                    append(uploadedLines.joinToString("\n"))
+                    append(uploadedLines.joinToString("\n\n"))
                     if (text.isNotBlank()) append("\n\n")
                 }
                 if (text.isNotBlank()) {
@@ -415,13 +486,13 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 } else if (imageUrls.isNotEmpty()) {
                     append("请查看我发送的图片。")
                 } else if (uploadedLines.isNotEmpty()) {
-                    append("请查看我上传的附件文件。")
+                    append("请查看并整理我上传的文档文件。")
                 }
             }
 
             val displaySummary = buildString {
-                if (attachments.isNotEmpty()) {
-                    append(attachments.joinToString(" ") { if (it.isImage) "[图片:${it.name}]" else "[文件:${it.name}]" })
+                if (displayChips.isNotEmpty()) {
+                    append(displayChips.joinToString(" "))
                     if (text.isNotBlank()) append("\n")
                 }
                 append(text)

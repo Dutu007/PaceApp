@@ -142,6 +142,7 @@ private data class DocSummaryDto(
     val category: String = "note",
     val title: String = "",
     val preview: String = "",
+    @SerialName("mime_type") val mimeType: String = "",
     val editable: Boolean = false,
     val size: Long = 0,
     @SerialName("updated_at") val updatedAt: String = "",
@@ -156,8 +157,47 @@ private data class DocDetailDto(
     val category: String = "note",
     val title: String = "",
     val content: String = "",
+    @SerialName("mime_type") val mimeType: String = "",
+    @SerialName("raw_available") val rawAvailable: Boolean = false,
     val editable: Boolean = false,
     @SerialName("updated_at") val updatedAt: String = "",
+)
+
+@Serializable
+private data class GraphNodeDto(
+    val id: String,
+    val kind: String = "note",
+    val category: String = "note",
+    val label: String = "",
+    val subtitle: String = "",
+    val preview: String = "",
+    @SerialName("doc_path") val docPath: String = "",
+    @SerialName("updated_at") val updatedAt: String = "",
+    val weight: Int = 2,
+)
+
+@Serializable
+private data class GraphEdgeDto(
+    val source: String,
+    val target: String,
+    val kind: String = "related",
+    val label: String = "",
+)
+
+@Serializable
+private data class GraphStatsDto(
+    @SerialName("node_count") val nodeCount: Int = 0,
+    @SerialName("edge_count") val edgeCount: Int = 0,
+    @SerialName("doc_count") val docCount: Int = 0,
+    @SerialName("entry_count") val entryCount: Int = 0,
+    @SerialName("tag_count") val tagCount: Int = 0,
+)
+
+@Serializable
+private data class KnowledgeGraphDto(
+    val nodes: List<GraphNodeDto> = emptyList(),
+    val edges: List<GraphEdgeDto> = emptyList(),
+    val stats: GraphStatsDto = GraphStatsDto(),
 )
 
 @Serializable
@@ -197,6 +237,8 @@ private data class UploadFileResponseDto(
     @SerialName("host_path") val hostPath: String,
     val name: String,
     val size: Long = 0,
+    @SerialName("mime_type") val mimeType: String = "",
+    @SerialName("extracted_text") val extractedText: String = "",
 )
 
 class PaceRepository(context: Context) {
@@ -433,7 +475,7 @@ class PaceRepository(context: Context) {
                 throw ApiException(code, errCode ?: "upload_failed")
             }
             val dto = json.decodeFromString<UploadFileResponseDto>(raw)
-            UploadedFile(dto.path, dto.hostPath, dto.name, dto.size)
+            UploadedFile(dto.path, dto.hostPath, dto.name, dto.size, dto.mimeType, dto.extractedText)
         } finally {
             conn.disconnect()
         }
@@ -487,7 +529,9 @@ class PaceRepository(context: Context) {
             auth()
             if (!category.isNullOrBlank() && category != "all") parameter("category", category)
         }.bodyChecked<DocListDto>()
-        return dto.items.map { DocSummary(it.path, it.category, it.title, it.preview, it.editable, it.size, it.updatedAt) }
+        return dto.items.map {
+            DocSummary(it.path, it.category, it.title, it.preview, it.mimeType, it.editable, it.size, it.updatedAt)
+        }
     }
 
     suspend fun getDoc(path: String): DocDetail {
@@ -495,7 +539,7 @@ class PaceRepository(context: Context) {
             auth()
             parameter("path", path)
         }.bodyChecked<DocDetailDto>()
-        return DocDetail(dto.path, dto.category, dto.title, dto.content, dto.editable, dto.updatedAt)
+        return DocDetail(dto.path, dto.category, dto.title, dto.content, dto.mimeType, dto.rawAvailable, dto.editable, dto.updatedAt)
     }
 
     suspend fun saveDoc(path: String, content: String): DocDetail {
@@ -503,7 +547,7 @@ class PaceRepository(context: Context) {
             auth()
             jsonBody(SaveDocRequestDto(path, content))
         }.bodyChecked<DocDetailDto>()
-        return DocDetail(dto.path, dto.category, dto.title, dto.content, dto.editable, dto.updatedAt)
+        return DocDetail(dto.path, dto.category, dto.title, dto.content, dto.mimeType, dto.rawAvailable, dto.editable, dto.updatedAt)
     }
 
     suspend fun latestRelease(): AppRelease {
@@ -546,6 +590,60 @@ class PaceRepository(context: Context) {
                 }.joinToString("\n")
             }.getOrDefault("")
         }
+    }
+
+    suspend fun getGraph(): KnowledgeGraphData {
+        val dto = client.get("$baseUrl/api/v1/graph") { auth() }.bodyChecked<KnowledgeGraphDto>()
+        return KnowledgeGraphData(
+            nodes = dto.nodes.map {
+                GraphNodeItem(
+                    id = it.id,
+                    kind = it.kind,
+                    category = it.category,
+                    label = it.label,
+                    subtitle = it.subtitle,
+                    preview = it.preview,
+                    docPath = it.docPath,
+                    updatedAt = it.updatedAt,
+                    weight = it.weight,
+                )
+            },
+            edges = dto.edges.map {
+                GraphEdgeItem(
+                    source = it.source,
+                    target = it.target,
+                    kind = it.kind,
+                    label = it.label,
+                )
+            },
+            stats = GraphStatsItem(
+                nodeCount = dto.stats.nodeCount,
+                edgeCount = dto.stats.edgeCount,
+                docCount = dto.stats.docCount,
+                entryCount = dto.stats.entryCount,
+                tagCount = dto.stats.tagCount,
+            ),
+        )
+    }
+
+    suspend fun downloadDocRaw(path: String, destFile: File): File {
+        destFile.parentFile?.mkdirs()
+        client.prepareGet("$baseUrl/api/v1/docs/raw") {
+            auth()
+            parameter("path", path)
+        }.execute { resp ->
+            resp.check()
+            val channel = resp.bodyAsChannel()
+            destFile.outputStream().use { out ->
+                val buf = ByteArray(16 * 1024)
+                while (!channel.isClosedForRead) {
+                    val read = channel.readAvailable(buf)
+                    if (read <= 0) break
+                    out.write(buf, 0, read)
+                }
+            }
+        }
+        return destFile
     }
 
     private fun EntryDto.toDomain() = EntryItem(

@@ -352,7 +352,7 @@ private fun PaceBottomBar(
             val tabs = listOf(
                 Triple(PaceTab.CHAT, "对话", ChatTabIcon),
                 Triple(PaceTab.ENTRIES, "记录", EntriesTabIcon),
-                Triple(PaceTab.DOCS, "文档", DocsTabIcon),
+                Triple(PaceTab.DOCS, "知识库", DocsTabIcon),
             )
             tabs.forEach { (tab, label, icon) ->
                 val selected = currentTab == tab

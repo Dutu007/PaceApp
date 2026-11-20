@@ -420,7 +420,9 @@ func (s *server) routes() http.Handler {
 
 	mux.Handle("GET /api/v1/docs", s.authMiddleware(http.HandlerFunc(s.listDocs)))
 	mux.Handle("GET /api/v1/docs/content", s.authMiddleware(http.HandlerFunc(s.getDocContent)))
+	mux.Handle("GET /api/v1/docs/raw", s.authMiddleware(http.HandlerFunc(s.getDocRaw)))
 	mux.Handle("PUT /api/v1/docs/content", s.authMiddleware(http.HandlerFunc(s.putDocContent)))
+	mux.Handle("GET /api/v1/graph", s.authMiddleware(http.HandlerFunc(s.getGraph)))
 	mux.Handle("POST /api/v1/uploads", s.authMiddleware(http.HandlerFunc(s.uploadFile)))
 
 	mux.Handle("GET /api/v1/app/latest", s.authMiddleware(http.HandlerFunc(s.latestApp)))

@@ -92,6 +92,7 @@ data class DocSummary(
     val category: String,
     val title: String,
     val preview: String,
+    val mimeType: String = "",
     val editable: Boolean,
     val size: Long,
     val updatedAt: String,
@@ -102,6 +103,8 @@ data class DocDetail(
     val category: String,
     val title: String,
     val content: String,
+    val mimeType: String = "",
+    val rawAvailable: Boolean = false,
     val editable: Boolean,
     val updatedAt: String,
 )
@@ -111,6 +114,7 @@ data class PendingAttachment(
     val uriString: String,
     val name: String,
     val isImage: Boolean,
+    val mimeType: String = "",
 )
 
 data class UploadedFile(
@@ -118,6 +122,41 @@ data class UploadedFile(
     val hostPath: String,
     val name: String,
     val size: Long,
+    val mimeType: String = "",
+    val extractedText: String = "",
+)
+
+data class GraphNodeItem(
+    val id: String,
+    val kind: String,
+    val category: String,
+    val label: String,
+    val subtitle: String = "",
+    val preview: String = "",
+    val docPath: String = "",
+    val updatedAt: String = "",
+    val weight: Int = 2,
+)
+
+data class GraphEdgeItem(
+    val source: String,
+    val target: String,
+    val kind: String,
+    val label: String = "",
+)
+
+data class GraphStatsItem(
+    val nodeCount: Int = 0,
+    val edgeCount: Int = 0,
+    val docCount: Int = 0,
+    val entryCount: Int = 0,
+    val tagCount: Int = 0,
+)
+
+data class KnowledgeGraphData(
+    val nodes: List<GraphNodeItem> = emptyList(),
+    val edges: List<GraphEdgeItem> = emptyList(),
+    val stats: GraphStatsItem = GraphStatsItem(),
 )
 
 sealed interface ChatStreamEvent {

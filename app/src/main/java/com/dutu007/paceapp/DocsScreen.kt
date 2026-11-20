@@ -57,19 +57,99 @@ fun DocsScreen(
     state: PaceUiState,
     viewModel: PaceViewModel,
 ) {
+    var viewMode by remember { mutableStateOf("graph") }
+    var previewDocTarget by remember { mutableStateOf<InAppPreviewTarget?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newNoteName by remember { mutableStateOf("") }
     var newNoteContent by remember { mutableStateOf("") }
+
+    fun openSmartDoc(path: String, title: String, mime: String = "") {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        if (ext !in setOf("md", "json", "txt", "csv")) {
+            previewDocTarget = InAppPreviewTarget.ServerDoc(
+                title = title.ifBlank { path.substringAfterLast('/') },
+                docPath = path,
+                mimeType = mime.ifBlank { mimeTypeForFileName(path) },
+            )
+        } else {
+            viewModel.openDoc(path)
+        }
+    }
 
     val filtered = state.docs.filter { doc ->
         val q = state.docSearch.trim().lowercase()
         q.isEmpty() || doc.title.lowercase().contains(q) || doc.path.lowercase().contains(q) || doc.preview.lowercase().contains(q)
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 88.dp),
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            listOf("graph" to "知识图谱", "list" to "文档列表").forEach { (mode, label) ->
+                val selected = viewMode == mode
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (selected) PacePalette.Primary else PacePalette.Card,
+                    border = BorderStroke(1.dp, if (selected) PacePalette.Primary else PacePalette.CardBorder),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { viewMode = mode },
+                ) {
+                    Box(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) Color.White else PacePalette.TextSecondary,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (viewMode == "graph") {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = state.docSearch,
+                    onValueChange = viewModel::setDocSearch,
+                    placeholder = { Text("高亮/搜索知识图谱节点、文档、标签...") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                KnowledgeGraphExplorer(
+                    graph = state.graph,
+                    loading = state.graphLoading,
+                    searchQuery = state.docSearch,
+                    onRefresh = {
+                        viewModel.refreshDocs()
+                        viewModel.refreshGraph()
+                    },
+                    onOpenDoc = { path, title -> openSmartDoc(path, title) },
+                    onAskHermes = { prompt -> viewModel.askHermesAboutPrompt(prompt) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                )
+            }
+        } else {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 88.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item {
@@ -90,6 +170,7 @@ fun DocsScreen(
                             "all" to "全部",
                             "note" to "笔记",
                             "diary" to "日记",
+                            "upload" to "文档附件",
                             "memory" to "Hermes记忆",
                             "data" to "数据文件",
                         ).forEach { (cat, label) ->
@@ -136,7 +217,7 @@ fun DocsScreen(
                 }
                 else -> {
                     items(filtered, key = { it.path }) { doc ->
-                        DocRowCard(doc = doc, onClick = { viewModel.openDoc(doc.path) })
+                        DocRowCard(doc = doc, onClick = { openSmartDoc(doc.path, doc.title, doc.mimeType) })
                     }
                 }
             }
@@ -151,6 +232,20 @@ fun DocsScreen(
         ) {
             Text("+", fontSize = 24.sp, fontWeight = FontWeight.Medium)
         }
+        }
+        }
+    }
+
+    previewDocTarget?.let { target ->
+        InAppDocumentViewerDialog(
+            target = target,
+            viewModel = viewModel,
+            onDismiss = { previewDocTarget = null },
+            onAskHermes = { path ->
+                previewDocTarget = null
+                viewModel.askHermesAboutDoc(path)
+            },
+        )
     }
 
     if (showCreateDialog) {
@@ -221,6 +316,10 @@ private fun DocRowCard(doc: DocSummary, onClick: () -> Unit) {
                 val (badgeLabel, badgeBg, badgeFg) = when (doc.category) {
                     "diary" -> Triple("日记", PacePalette.SuccessSoft, PacePalette.Success)
                     "memory" -> Triple("记忆", PacePalette.AccentAmberSoft, PacePalette.AccentAmber)
+                    "upload" -> {
+                        val (fmt, col) = fileTypeBadge(doc.path)
+                        Triple(fmt, col.copy(alpha = 0.14f), col)
+                    }
                     "data" -> Triple("数据", PacePalette.Muted, PacePalette.TextSecondary)
                     else -> Triple("笔记", PacePalette.PrimarySoft, PacePalette.Primary)
                 }

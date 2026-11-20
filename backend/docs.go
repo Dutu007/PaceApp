@@ -18,18 +18,21 @@ type docSummary struct {
 	Category  string `json:"category"`
 	Title     string `json:"title"`
 	Preview   string `json:"preview"`
+	MimeType  string `json:"mime_type"`
 	Editable  bool   `json:"editable"`
 	Size      int64  `json:"size"`
 	UpdatedAt string `json:"updated_at"`
 }
 
 type docContentResponse struct {
-	Path      string `json:"path"`
-	Category  string `json:"category"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	Editable  bool   `json:"editable"`
-	UpdatedAt string `json:"updated_at"`
+	Path         string `json:"path"`
+	Category     string `json:"category"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+	MimeType     string `json:"mime_type"`
+	RawAvailable bool   `json:"raw_available"`
+	Editable     bool   `json:"editable"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 type saveDocRequest struct {
@@ -84,7 +87,7 @@ func (d *docStore) list() ([]docSummary, error) {
 		}
 		relSlash := filepath.ToSlash(rel)
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if ext != ".md" && ext != ".json" {
+		if !isSupportedDocExt(ext) {
 			return nil
 		}
 		if strings.EqualFold(entry.Name(), "README.md") {
@@ -95,7 +98,10 @@ func (d *docStore) list() ([]docSummary, error) {
 			return nil
 		}
 		category := classifyDoc(relSlash)
-		raw, _ := os.ReadFile(full)
+		var raw []byte
+		if isTextReadableExt(ext) && info.Size() <= 256<<10 {
+			raw, _ = os.ReadFile(full)
+		}
 		title := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 		if relSlash == "images/running/notes.json" {
 			title = "跑步打卡记录"
@@ -106,7 +112,8 @@ func (d *docStore) list() ([]docSummary, error) {
 			Path:      relSlash,
 			Category:  category,
 			Title:     title,
-			Preview:   summarizePreview(string(raw)),
+			Preview:   previewForDoc(ext, raw, info.Size()),
+			MimeType:  mimeTypeForExt(ext),
 			Editable:  ext == ".md" && (strings.HasPrefix(relSlash, "notes/") || strings.HasPrefix(relSlash, "diary/")),
 			Size:      info.Size(),
 			UpdatedAt: info.ModTime().In(d.tz).Format(time.RFC3339),
@@ -140,12 +147,14 @@ func (d *docStore) read(relPath string) (docContentResponse, error) {
 			return docContentResponse{}, err
 		}
 		return docContentResponse{
-			Path:      clean,
-			Category:  "memory",
-			Title:     "Hermes 长期记忆",
-			Content:   string(raw),
-			Editable:  false,
-			UpdatedAt: info.ModTime().In(d.tz).Format(time.RFC3339),
+			Path:         clean,
+			Category:     "memory",
+			Title:        "Hermes 长期记忆",
+			Content:      string(raw),
+			MimeType:     "text/markdown; charset=utf-8",
+			RawAvailable: true,
+			Editable:     false,
+			UpdatedAt:    info.ModTime().In(d.tz).Format(time.RFC3339),
 		}, nil
 	}
 	if d.assistantDir == "" {
@@ -159,18 +168,26 @@ func (d *docStore) read(relPath string) (docContentResponse, error) {
 	if err != nil {
 		return docContentResponse{}, err
 	}
-	raw, err := os.ReadFile(full)
-	if err != nil {
-		return docContentResponse{}, err
-	}
 	ext := strings.ToLower(filepath.Ext(clean))
+	var contentText string
+	if isTextReadableExt(ext) {
+		raw, err := os.ReadFile(full)
+		if err != nil {
+			return docContentResponse{}, err
+		}
+		contentText = string(raw)
+	} else {
+		contentText = extractDocText(full, ext, info.Size(), 20000)
+	}
 	return docContentResponse{
-		Path:      clean,
-		Category:  classifyDoc(clean),
-		Title:     strings.TrimSuffix(filepath.Base(clean), filepath.Ext(clean)),
-		Content:   string(raw),
-		Editable:  ext == ".md" && (strings.HasPrefix(clean, "notes/") || strings.HasPrefix(clean, "diary/")),
-		UpdatedAt: info.ModTime().In(d.tz).Format(time.RFC3339),
+		Path:         clean,
+		Category:     classifyDoc(clean),
+		Title:        strings.TrimSuffix(filepath.Base(clean), filepath.Ext(clean)),
+		Content:      contentText,
+		MimeType:     mimeTypeForExt(ext),
+		RawAvailable: true,
+		Editable:     ext == ".md" && (strings.HasPrefix(clean, "notes/") || strings.HasPrefix(clean, "diary/")),
+		UpdatedAt:    info.ModTime().In(d.tz).Format(time.RFC3339),
 	}, nil
 }
 
@@ -299,6 +316,8 @@ func sanitizeRelPath(raw string) (string, error) {
 
 func classifyDoc(rel string) string {
 	switch {
+	case strings.HasPrefix(rel, "uploads/"):
+		return "upload"
 	case strings.HasPrefix(rel, "diary/"):
 		return "diary"
 	case strings.HasPrefix(rel, "notes/"):
@@ -391,7 +410,8 @@ func (s *server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 12<<20)
-	if err := r.ParseMultipartForm(12 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 25<<20)
+	if err := r.ParseMultipartForm(24 << 20); err != nil {
 		errorJSON(w, http.StatusBadRequest, "invalid_upload")
 		return
 	}
@@ -426,11 +446,18 @@ func (s *server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusInternalServerError, "upload_failed")
 		return
 	}
+	ext := strings.ToLower(filepath.Ext(baseName))
+	extracted := ""
+	if !isImageExt(ext) {
+		extracted = extractDocText(full, ext, written, 12000)
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"path":      rel,
-		"host_path": "/home/dutu/workspace/personal-assistant/data/" + rel,
-		"name":      baseName,
-		"size":      written,
+		"path":           rel,
+		"host_path":      "/home/dutu/workspace/personal-assistant/data/" + rel,
+		"name":           baseName,
+		"size":           written,
+		"mime_type":      mimeTypeForExt(ext),
+		"extracted_text": extracted,
 	})
 }
 

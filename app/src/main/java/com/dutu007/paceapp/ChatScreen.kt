@@ -1,9 +1,11 @@
 package com.dutu007.paceapp
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -95,6 +98,7 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     var sessionToManage by remember { mutableStateOf<SessionItem?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var previewTarget by remember { mutableStateOf<InAppPreviewTarget?>(null) }
 
     LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.content) {
         if (state.messages.isNotEmpty()) {
@@ -184,6 +188,24 @@ fun ChatScreen(
                                 message = msg,
                                 onPinCard = viewModel::pinCardToBoard,
                                 onSaveText = viewModel::saveTextAsEntry,
+                                onOpenChip = { chip ->
+                                    previewTarget = if (chip.docPath != null) {
+                                        InAppPreviewTarget.ServerDoc(
+                                            title = chip.label,
+                                            docPath = chip.docPath,
+                                            mimeType = mimeTypeForFileName(chip.label),
+                                        )
+                                    } else if (chip.localUri != null) {
+                                        InAppPreviewTarget.LocalUri(
+                                            title = chip.label,
+                                            uriString = chip.localUri,
+                                            mimeType = mimeTypeForFileName(chip.label, fallback = if (chip.isImage) "image/*" else "*/*"),
+                                            isImage = chip.isImage,
+                                        )
+                                    } else {
+                                        null
+                                    }
+                                },
                             )
                         }
                     }
@@ -191,10 +213,23 @@ fun ChatScreen(
             }
         }
 
-        // Sleek Doubao-style composer: tap to type, long-press mic (left of send) for refined voice input
+        // Sleek Doubao-style composer: tap to type, long-press mic for voice input
         DoubaoComposer(
             state = state,
             viewModel = viewModel,
+            onOpenPreview = { previewTarget = it },
+        )
+    }
+
+    previewTarget?.let { target ->
+        InAppDocumentViewerDialog(
+            target = target,
+            viewModel = viewModel,
+            onDismiss = { previewTarget = null },
+            onAskHermes = { path ->
+                previewTarget = null
+                viewModel.askHermesAboutDoc(path)
+            },
         )
     }
 
@@ -326,6 +361,7 @@ fun ChatScreen(
 private fun DoubaoComposer(
     state: PaceUiState,
     viewModel: PaceViewModel,
+    onOpenPreview: (InAppPreviewTarget) -> Unit,
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -386,6 +422,25 @@ private fun DoubaoComposer(
         }
     }
 
+    val speechDialogLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val texts = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS).orEmpty()
+            if (texts.isNotEmpty()) {
+                viewModel.finalizeVoiceInput(texts)
+            }
+        }
+    }
+
+    val openSystemVoiceDialog: () -> Unit = {
+        voiceListening = false
+        voicePartial = ""
+        runCatching {
+            speechDialogLauncher.launch(buildSystemSpeechIntent())
+        }.onFailure {
+            viewModel.notifyHint("系统语音弹窗不可用，请直接使用键盘语音输入", isError = true)
+        }
+    }
+
     val voiceController = rememberVoiceInputController(
         context = context,
         onPartial = { voicePartial = it },
@@ -399,6 +454,7 @@ private fun DoubaoComposer(
             voicePartial = ""
             viewModel.notifyHint(msg, isError = true)
         },
+        onRequestSystemDialog = openSystemVoiceDialog,
     )
 
     Column(
@@ -487,7 +543,15 @@ private fun DoubaoComposer(
                         waitForUpOrCancellation()
                     }
                     if (quickRelease != null) {
-                        viewModel.notifyHint("按住此处麦克风说话，松手识别填入输入框")
+                        val granted = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            openSystemVoiceDialog()
+                        }
                         return@awaitEachGesture
                     }
 
@@ -547,7 +611,7 @@ private fun DoubaoComposer(
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = if (voiceListening) "松手转写" else "按住说话",
+                    text = if (voiceListening) "松手转写" else "按住说话 · 轻点弹窗",
                     style = MaterialTheme.typography.labelMedium,
                     color = when {
                         voiceCancelling -> MaterialTheme.colorScheme.error
@@ -563,33 +627,95 @@ private fun DoubaoComposer(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 state.pendingAttachments.forEach { att ->
-                    Surface(
-                        color = PacePalette.PrimarySoft,
-                        border = BorderStroke(1.dp, PacePalette.Primary.copy(alpha = 0.25f)),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    if (att.isImage) {
+                        Box(
+                            modifier = Modifier
+                                .size(68.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    onOpenPreview(
+                                        InAppPreviewTarget.LocalUri(
+                                            title = att.name,
+                                            uriString = att.uriString,
+                                            mimeType = att.mimeType.ifBlank { "image/*" },
+                                            isImage = true,
+                                        ),
+                                    )
+                                },
                         ) {
-                            Text(
-                                text = (if (att.isImage) "🖼 " else "📎 ") + att.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = PacePalette.Primary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                            UriThumbnailImage(
+                                uriString = att.uriString,
+                                contentDescription = att.name,
+                                modifier = Modifier.fillMaxSize(),
                             )
-                            Text(
-                                text = "×",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = PacePalette.Primary,
-                                modifier = Modifier.clickable { viewModel.removeAttachment(att.id) },
-                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = Color.Black.copy(alpha = 0.62f),
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(4.dp)
+                                    .size(20.dp)
+                                    .clickable { viewModel.removeAttachment(att.id) },
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("×", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    } else {
+                        val (badge, badgeColor) = fileTypeBadge(att.name)
+                        Surface(
+                            color = PacePalette.Card,
+                            border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.35f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.clickable {
+                                onOpenPreview(
+                                    InAppPreviewTarget.LocalUri(
+                                        title = att.name,
+                                        uriString = att.uriString,
+                                        mimeType = att.mimeType.ifBlank { mimeTypeForFileName(att.name) },
+                                        isImage = false,
+                                    ),
+                                )
+                            },
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Surface(
+                                    color = badgeColor.copy(alpha = 0.14f),
+                                    shape = RoundedCornerShape(6.dp),
+                                ) {
+                                    Text(
+                                        text = badge,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = badgeColor,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                    )
+                                }
+                                Text(
+                                    text = att.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = PacePalette.TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 140.dp),
+                                )
+                                Text(
+                                    text = "×",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PacePalette.TextSecondary,
+                                    modifier = Modifier.clickable { viewModel.removeAttachment(att.id) },
+                                )
+                            }
                         }
                     }
                 }
@@ -771,12 +897,14 @@ private fun MessageItem(
     message: ChatMessage,
     onPinCard: (com.dutu007.paceapp.data.PaceCardData) -> Unit,
     onSaveText: (String) -> Unit,
+    onOpenChip: (ChatAttachmentChip) -> Unit,
 ) {
     val context = LocalContext.current
     val isUser = message.role == "user"
     val isTool = message.role == "tool"
 
     if (isUser) {
+        val (cleanText, chips) = remember(message.content) { extractChatAttachmentChips(message.content) }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End,
@@ -785,14 +913,75 @@ private fun MessageItem(
                 color = PacePalette.Primary,
                 contentColor = Color.White,
                 shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
-                modifier = Modifier.fillMaxWidth(0.82f),
+                modifier = Modifier.fillMaxWidth(0.84f),
             ) {
-                SelectionContainer {
-                    Text(
-                        text = message.content,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    )
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (chips.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            chips.forEach { chip ->
+                                if (chip.isImage && chip.localUri != null) {
+                                    UriThumbnailImage(
+                                        uriString = chip.localUri,
+                                        contentDescription = chip.label,
+                                        modifier = Modifier
+                                            .size(86.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .clickable { onOpenChip(chip) },
+                                    )
+                                } else {
+                                    val (badge, _) = fileTypeBadge(chip.label)
+                                    Surface(
+                                        color = Color.White.copy(alpha = 0.16f),
+                                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.clickable { onOpenChip(chip) },
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        ) {
+                                            Surface(
+                                                color = Color.White.copy(alpha = 0.22f),
+                                                shape = RoundedCornerShape(5.dp),
+                                            ) {
+                                                Text(
+                                                    badge,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                                )
+                                            }
+                                            Text(
+                                                chip.label,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color.White,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.widthIn(max = 160.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (cleanText.isNotBlank()) {
+                        SelectionContainer {
+                            Text(
+                                text = cleanText,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
             }
         }

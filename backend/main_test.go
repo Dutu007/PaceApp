@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -329,5 +330,155 @@ func TestUploadFile(t *testing.T) {
 	rel, _ := res["path"].(string)
 	if !strings.HasPrefix(rel, "uploads/") {
 		t.Fatalf("unexpected upload path: %+v", res)
+	}
+}
+
+func TestOfficeDocsRawAndKnowledgeGraph(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	token, _, _ := srv.auth.issueToken(time.Now())
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+
+	// Seed a markdown note with hashtag + wiki link and an entry linking to it
+	_ = os.MkdirAll(filepath.Join(srv.docs.assistantDir, "notes"), 0o755)
+	if err := os.WriteFile(filepath.Join(srv.docs.assistantDir, "notes", "plan.md"), []byte("# 年度计划\n\n坚持 #跑步 与阅读，参考 [[honors]]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srv.docs.assistantDir, "notes", "honors.md"), []byte("# 荣誉记录\n\n#跑步 10公里完赛"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srv.docs.memoryFile, []byte("# 记忆\n\n## § 跑步与习惯\n每周保持三次跑步。\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = srv.entries.Create(context.Background(), entryItem{
+		ID:      "entry-graph-1",
+		Kind:    "note",
+		Title:   "晨跑打卡",
+		Content: "今天跑了 6 公里 #跑步",
+		Tags:    []string{"跑步"},
+		Source:  "paceapp",
+	})
+
+	// Create minimal valid DOCX (word/document.xml) and upload via /api/v1/uploads
+	var docxBuf bytes.Buffer
+	zw := newTestZip(&docxBuf)
+	addZipFile(t, zw, "word/document.xml", `<w:document><w:body><w:p><w:r><w:t>季度工作汇报</w:t></w:r></w:p></w:body></w:document>`)
+	_ = zw.Close()
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, _ := mw.CreateFormFile("file", "report.docx")
+	_, _ = part.Write(docxBuf.Bytes())
+	_ = mw.Close()
+
+	upReq, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/uploads", &body)
+	upReq.Header.Set("Authorization", "Bearer "+token)
+	upReq.Header.Set("Content-Type", mw.FormDataContentType())
+	upResp, err := http.DefaultClient.Do(upReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var upOut map[string]any
+	if err := json.NewDecoder(upResp.Body).Decode(&upOut); err != nil {
+		t.Fatal(err)
+	}
+	upResp.Body.Close()
+	if upResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 docx upload, got %d", upResp.StatusCode)
+	}
+	extracted, _ := upOut["extracted_text"].(string)
+	if !strings.Contains(extracted, "季度工作汇报") {
+		t.Fatalf("expected extracted docx text, got %q", extracted)
+	}
+	docxRel, _ := upOut["path"].(string)
+
+	// Verify /api/v1/docs/content reads extracted docx text and /api/v1/docs/raw serves exact bytes
+	docReq, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/docs/content?path="+docxRel, nil)
+	docReq.Header.Set("Authorization", "Bearer "+token)
+	docResp, err := http.DefaultClient.Do(docReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var docDetail docContentResponse
+	_ = json.NewDecoder(docResp.Body).Decode(&docDetail)
+	docResp.Body.Close()
+	if !docDetail.RawAvailable || !strings.Contains(docDetail.Content, "季度工作汇报") {
+		t.Fatalf("unexpected docx doc detail: %+v", docDetail)
+	}
+
+	rawReq, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/docs/raw?path="+docxRel, nil)
+	rawReq.Header.Set("Authorization", "Bearer "+token)
+	rawResp, err := http.DefaultClient.Do(rawReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawResp.Body.Close()
+	if rawResp.StatusCode != http.StatusOK || !strings.Contains(rawResp.Header.Get("Content-Type"), "wordprocessingml") {
+		t.Fatalf("unexpected raw response status=%d ct=%s", rawResp.StatusCode, rawResp.Header.Get("Content-Type"))
+	}
+
+	// Verify path traversal blocked on /api/v1/docs/raw
+	badRawReq, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/docs/raw?path=../secret.txt", nil)
+	badRawReq.Header.Set("Authorization", "Bearer "+token)
+	badRawResp, err := http.DefaultClient.Do(badRawReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badRawResp.Body.Close()
+	if badRawResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on raw path traversal, got %d", badRawResp.StatusCode)
+	}
+
+	// Verify /api/v1/graph builds hubs, memory sections, docs, tags, entries, and edges
+	gReq, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/graph", nil)
+	gReq.Header.Set("Authorization", "Bearer "+token)
+	gResp, err := http.DefaultClient.Do(gReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gResp.Body.Close()
+	if gResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 graph, got %d", gResp.StatusCode)
+	}
+	var graph knowledgeGraphResponse
+	if err := json.NewDecoder(gResp.Body).Decode(&graph); err != nil {
+		t.Fatal(err)
+	}
+	if graph.Stats.NodeCount < 8 || graph.Stats.EdgeCount < 7 || graph.Stats.TagCount < 1 {
+		t.Fatalf("expected rich graph stats, got %+v", graph.Stats)
+	}
+
+	// Verify XLSX extraction as well
+	xlsxPath := filepath.Join(srv.docs.assistantDir, "uploads", "budget.xlsx")
+	_ = os.MkdirAll(filepath.Dir(xlsxPath), 0o755)
+	var xBuf bytes.Buffer
+	xzw := newTestZip(&xBuf)
+	addZipFile(t, xzw, "xl/sharedStrings.xml", `<sst><si><t>项目</t></si><si><t>预算</t></si></sst>`)
+	addZipFile(t, xzw, "xl/worksheets/sheet1.xml", `<worksheet><sheetData><row><c t="s"><v>0</v></c><c t="s"><v>1</v></c></row><row><c><v>100</v></c><c><v>200</v></c></row></sheetData></worksheet>`)
+	_ = xzw.Close()
+	if err := os.WriteFile(xlsxPath, xBuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	xDoc, err := srv.docs.read("uploads/budget.xlsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(xDoc.Content, "| 项目 | 预算 |") || !strings.Contains(xDoc.Content, "| 100 | 200 |") {
+		t.Fatalf("unexpected xlsx extracted table: %s", xDoc.Content)
+	}
+}
+
+func newTestZip(buf *bytes.Buffer) *zip.Writer {
+	return zip.NewWriter(buf)
+}
+
+func addZipFile(t *testing.T, zw *zip.Writer, name, content string) {
+	t.Helper()
+	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(content)); err != nil {
+		t.Fatal(err)
 	}
 }
