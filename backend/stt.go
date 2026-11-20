@@ -48,8 +48,8 @@ func newSTTClient(baseURL, apiKey, model string) *sttClient {
 }
 
 func cleanTranscriptText(raw string) string {
-	stripped := senseVoiceTagRegex.ReplaceAllString(raw, " ")
-	return strings.TrimSpace(strings.Join(strings.Fields(stripped), " "))
+	stripped := senseVoiceTagRegex.ReplaceAllString(raw, "")
+	return strings.TrimSpace(stripped)
 }
 
 func (c *sttClient) transcribe(ctx context.Context, filename string, audioBytes []byte) (string, error) {
@@ -283,22 +283,10 @@ func (s *server) transcribeStt(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadGateway, "stt_upstream_failed")
 		return
 	}
-	if rawText == "" {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"text":     "",
-			"raw_text": "",
-			"refined":  false,
-			"provider": "siliconflow",
-		})
-		return
-	}
-
-	contextDraft := strings.TrimSpace(r.FormValue("context"))
-	finalText, refined := s.llm.refineSpeech(r.Context(), rawText, nil, contextDraft)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"text":     finalText,
+		"text":     rawText,
 		"raw_text": rawText,
-		"refined":  refined,
+		"refined":  false,
 		"provider": "siliconflow",
 	})
 }

@@ -37,6 +37,20 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
 
+fun appendTranscriptText(existingDraft: String, transcript: String): String {
+    val clean = transcript.trim()
+    if (clean.isEmpty()) return existingDraft
+    val prefix = existingDraft.trimEnd()
+    val needsSpace = prefix.isNotEmpty() && prefix.last().let {
+        it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9'
+    }
+    return when {
+        prefix.isEmpty() -> clean
+        needsSpace -> "$prefix $clean"
+        else -> "$prefix$clean"
+    }
+}
+
 enum class PaceTab { CHAT, ENTRIES, DOCS }
 
 data class PaceNotice(
@@ -62,6 +76,7 @@ data class PaceUiState(
     val messages: List<ChatMessage> = emptyList(),
     val messagesLoading: Boolean = false,
     val draft: String = "",
+    val draftCursorTick: Int = 0,
     val streaming: Boolean = false,
     val activeRunId: String? = null,
     val toolActivities: List<ToolActivity> = emptyList(),
@@ -207,9 +222,11 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         val clean = text.trim()
         if (clean.isEmpty()) return
         _uiState.update { s ->
-            val prefix = s.draft.trimEnd()
-            val nextDraft = if (prefix.isEmpty()) clean else "$prefix $clean"
-            s.copy(voiceRefining = false, draft = nextDraft)
+            s.copy(
+                voiceRefining = false,
+                draft = appendTranscriptText(s.draft, clean),
+                draftCursorTick = s.draftCursorTick + 1,
+            )
         }
     }
 

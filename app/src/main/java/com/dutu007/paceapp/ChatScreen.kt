@@ -69,7 +69,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -374,6 +376,22 @@ private fun DoubaoComposer(
     var showAttachmentTray by remember { mutableStateOf(false) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
 
+    var draftValue by remember {
+        mutableStateOf(TextFieldValue(text = state.draft, selection = TextRange(state.draft.length)))
+    }
+    var lastCursorTick by remember { mutableIntStateOf(state.draftCursorTick) }
+    LaunchedEffect(state.draft, state.draftCursorTick) {
+        if (draftValue.text != state.draft || lastCursorTick != state.draftCursorTick) {
+            draftValue = TextFieldValue(text = state.draft, selection = TextRange(state.draft.length))
+            lastCursorTick = state.draftCursorTick
+        }
+    }
+    val activeDraftValue = if (draftValue.text == state.draft && lastCursorTick == state.draftCursorTick) {
+        draftValue
+    } else {
+        TextFieldValue(text = state.draft, selection = TextRange(state.draft.length))
+    }
+
     LaunchedEffect(voiceListening) {
         if (!voiceListening) {
             voiceElapsedSec = 0
@@ -482,7 +500,7 @@ private fun DoubaoComposer(
                     Text(
                         text = when {
                             voiceCancelling -> "松开手指取消发送"
-                            state.voiceRefining -> "正在识别并优化标点..."
+                            state.voiceRefining -> "正在识别语音..."
                             else -> "正在录音 ${voiceElapsedSec}s · 上滑取消 · 松手转文字"
                         },
                         style = MaterialTheme.typography.labelMedium,
@@ -778,8 +796,13 @@ private fun DoubaoComposer(
                         )
                     }
                     BasicTextField(
-                        value = state.draft,
-                        onValueChange = viewModel::setDraft,
+                        value = activeDraftValue,
+                        onValueChange = { updated ->
+                            draftValue = updated
+                            if (updated.text != state.draft) {
+                                viewModel.setDraft(updated.text)
+                            }
+                        },
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = PacePalette.TextPrimary),
                         cursorBrush = SolidColor(PacePalette.Primary),
                         maxLines = 5,

@@ -78,4 +78,11 @@ class AttachmentAndDocHelperTest {
         assertEquals("fmt ", String(wav, 12, 4, Charsets.US_ASCII))
         assertEquals("data", String(wav, 36, 4, Charsets.US_ASCII))
     }
+
+    @Test
+    fun appendsVoiceTranscriptAtEnd() {
+        assertEquals("第一句。", appendTranscriptText("", "第一句。"))
+        assertEquals("第一句。第二句。", appendTranscriptText("第一句。", "第二句。"))
+        assertEquals("Hermes 你好", appendTranscriptText("Hermes", "你好"))
+    }
 }

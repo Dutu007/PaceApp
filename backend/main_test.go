@@ -484,12 +484,14 @@ func TestSttTranscribe(t *testing.T) {
 	}))
 	defer sf.Close()
 
+	llmCalled := false
 	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCalled = true
 		if r.URL.Path != "/v1/chat/completions" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"帮我让 Hermes 整理一下日记。"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"should not be called"}}]}`))
 	}))
 	defer llm.Close()
 
@@ -528,10 +530,13 @@ func TestSttTranscribe(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if out.RawText != "帮我让河马斯整理一下日记" {
-		t.Fatalf("expected tags stripped raw text, got %q", out.RawText)
+	if llmCalled {
+		t.Fatal("expected /api/v1/stt/transcribe to bypass DeepSeek LLM refine")
 	}
-	if !out.Refined || !strings.Contains(out.Text, "Hermes") || out.Provider != "siliconflow" {
+	if out.Text != "帮我让河马斯整理一下日记" || out.RawText != "帮我让河马斯整理一下日记" {
+		t.Fatalf("expected direct ASR text, got %+v", out)
+	}
+	if out.Refined || out.Provider != "siliconflow" {
 		t.Fatalf("unexpected transcribe response: %+v", out)
 	}
 }
