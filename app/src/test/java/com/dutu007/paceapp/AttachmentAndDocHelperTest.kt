@@ -157,5 +157,9 @@ class AttachmentAndDocHelperTest {
         assertEquals(0xFF0E9F6E.toInt(), sleepScoreColorInt(90))
         assertEquals(0xFFD97706.toInt(), sleepScoreColorInt(77))
         assertEquals(0xFFDC2626.toInt(), sleepScoreColorInt(57))
+
+        assertEquals(45 to 100, computeSleepScoreRange(listOf(87, 84, 90, 88, 57, 77)))
+        assertEquals(70 to 100, computeSleepScoreRange(listOf(86, 88, 90)))
+        assertEquals(50 to 100, computeSleepScoreRange(emptyList()))
     }
 }

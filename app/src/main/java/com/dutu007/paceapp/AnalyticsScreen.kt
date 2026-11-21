@@ -54,8 +54,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
@@ -1259,6 +1264,51 @@ private fun SleepScheduleChart(
         val isSevenOrFewer = nights.size <= 7
         val gridColor = PacePalette.CardBorder
         val textMeasurer = rememberTextMeasurer()
+        val (scoreMin, scoreMax) = remember(nights) {
+            computeSleepScoreRange(nights.mapNotNull { it.score })
+        }
+
+        // Compact 1-line micro-legend distinguishing floating sleep bars and background score curve
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color(0xFF4344CE).copy(alpha = 0.78f)),
+                )
+                Text(
+                    text = "睡眠时段/时长",
+                    fontSize = 9.5.sp,
+                    color = PacePalette.TextSecondary,
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(12.dp)
+                        .height(2.5.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFF59E0B)),
+                )
+                Text(
+                    text = "分数走势",
+                    fontSize = 9.5.sp,
+                    color = PacePalette.TextSecondary,
+                )
+            }
+        }
 
         if (isSevenOrFewer) {
             // Top uniform Score row across all columns
@@ -1293,7 +1343,7 @@ private fun SleepScheduleChart(
                 }
             }
 
-            // Middle full-width floating bars: bedtime above top cap, duration inside bar, wake below bottom cap
+            // Middle full-width layered plot: background score trend line + semi-translucent floating bars
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1320,6 +1370,7 @@ private fun SleepScheduleChart(
                 val corner = CornerRadius(10.dp.toPx(), 10.dp.toPx())
                 val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
 
+                // Layer 1: Dashed horizontal reference guides
                 listOf(0f, 0.33f, 0.67f, 1f).forEach { frac ->
                     val y = barZoneTop + barZoneH * frac
                     drawLine(
@@ -1331,8 +1382,20 @@ private fun SleepScheduleChart(
                     )
                 }
 
+                // Layer 2: Background sleep score trend line + gradient area (behind bars)
+                drawSleepScoreTrendLayer(
+                    nights = nights,
+                    slotW = slotW,
+                    barZoneTop = barZoneTop,
+                    barZoneBottom = barZoneBottom,
+                    scoreMin = scoreMin,
+                    scoreMax = scoreMax,
+                    denseMode = false,
+                )
+
                 val axisSpan = (maxAxisMinutes - minAxisMinutes).coerceAtLeast(1).toFloat()
 
+                // Layer 3 & 4: Semi-translucent floating sleep bars + crisp foreground labels
                 nights.forEachIndexed { idx, night ->
                     val centerX = idx * slotW + slotW / 2f
                     val left = centerX - barW / 2f
@@ -1367,20 +1430,27 @@ private fun SleepScheduleChart(
 
                     if (isSelected) {
                         drawRoundRect(
+                            color = Color(0xFF4344CE).copy(alpha = 0.78f),
+                            topLeft = Offset(left, topY),
+                            size = Size(barW, barH),
+                            cornerRadius = corner,
+                        )
+                        drawRoundRect(
                             color = SleepAccent,
                             topLeft = Offset(left, topY),
                             size = Size(barW, barH),
                             cornerRadius = corner,
+                            style = Stroke(width = 1.2.dp.toPx()),
                         )
                     } else {
                         drawRoundRect(
-                            color = Color(0xFFE8E9FF),
+                            color = Color(0xFFE2E4FF).copy(alpha = 0.62f),
                             topLeft = Offset(left, topY),
                             size = Size(barW, barH),
                             cornerRadius = corner,
                         )
                         drawRoundRect(
-                            color = Color(0xFFC5C7F8),
+                            color = Color(0xFFB8BCFA).copy(alpha = 0.78f),
                             topLeft = Offset(left, topY),
                             size = Size(barW, barH),
                             cornerRadius = corner,
@@ -1420,7 +1490,7 @@ private fun SleepScheduleChart(
                         drawText(wakeLayout, topLeft = Offset(wakeX, wakeY))
                     }
 
-                    val insideColor = if (isSelected) Color.White else Color(0xFF3F40B8)
+                    val insideColor = if (isSelected) Color.White else Color(0xFF3537B0)
                     val centerY = (topY + botY) / 2f
                     val (line1, line2) = formatBarDurationLines(night.durationMinutes)
                     if (line2 != null && barH >= 28.dp.toPx()) {
@@ -1498,7 +1568,7 @@ private fun SleepScheduleChart(
                 }
             }
         } else {
-            // Multi-week calendar mode (> 7 days): full-width floating capsules + 5 date ticks
+            // Multi-week calendar mode (> 7 days): background score curve + translucent floating capsules + 5 date ticks
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1531,6 +1601,16 @@ private fun SleepScheduleChart(
                     )
                 }
 
+                drawSleepScoreTrendLayer(
+                    nights = nights,
+                    slotW = slotW,
+                    barZoneTop = padY,
+                    barZoneBottom = h - padY,
+                    scoreMin = scoreMin,
+                    scoreMax = scoreMax,
+                    denseMode = true,
+                )
+
                 val axisSpan = (maxAxisMinutes - minAxisMinutes).coerceAtLeast(1).toFloat()
                 nights.forEachIndexed { idx, night ->
                     val centerX = idx * slotW + slotW / 2f
@@ -1543,7 +1623,7 @@ private fun SleepScheduleChart(
                         val rawBotY = padY + ((win.second - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * usableH
                         val capH = maxOf(10.dp.toPx(), rawBotY - topY)
                         drawRoundRect(
-                            color = if (isSelected) SleepAccent else SleepAccent.copy(alpha = 0.45f),
+                            color = if (isSelected) Color(0xFF4344CE).copy(alpha = 0.80f) else SleepAccent.copy(alpha = 0.36f),
                             topLeft = Offset(left, topY),
                             size = Size(capsuleW, capH),
                             cornerRadius = CornerRadius(capsuleW / 2f, capsuleW / 2f),
@@ -1552,7 +1632,7 @@ private fun SleepScheduleChart(
                         val ratio = (night.durationMinutes.toFloat() / maxDuration.toFloat()).coerceIn(0.12f, 1f)
                         val barH = maxOf(8.dp.toPx(), usableH * ratio)
                         drawRoundRect(
-                            color = if (isSelected) SleepAccent else SleepAccent.copy(alpha = 0.35f),
+                            color = if (isSelected) Color(0xFF4344CE).copy(alpha = 0.80f) else SleepAccent.copy(alpha = 0.30f),
                             topLeft = Offset(left, h - padY - barH),
                             size = Size(capsuleW, barH),
                             cornerRadius = CornerRadius(capsuleW / 2f, capsuleW / 2f),
@@ -1592,6 +1672,90 @@ private fun SleepScheduleChart(
                     )
                 }
             }
+        }
+    }
+}
+
+private fun DrawScope.drawSleepScoreTrendLayer(
+    nights: List<SleepChartNight>,
+    slotW: Float,
+    barZoneTop: Float,
+    barZoneBottom: Float,
+    scoreMin: Int,
+    scoreMax: Int,
+    denseMode: Boolean,
+) {
+    val scoreTop = barZoneTop + 4.dp.toPx()
+    val scoreBottom = barZoneBottom - 4.dp.toPx()
+    if (scoreBottom <= scoreTop) return
+    val scoreSpan = (scoreMax - scoreMin).coerceAtLeast(1).toFloat()
+    val scoreH = scoreBottom - scoreTop
+    val points = buildList {
+        nights.forEachIndexed { idx, night ->
+            val sc = night.score?.takeIf { it > 0 } ?: return@forEachIndexed
+            val cx = idx * slotW + slotW / 2f
+            val norm = ((sc - scoreMin) / scoreSpan).coerceIn(0f, 1f)
+            val cy = scoreTop + (1f - norm) * scoreH
+            add(Triple(Offset(cx, cy), sc, night))
+        }
+    }
+    if (points.isEmpty()) return
+
+    val amberLine = Color(0xFFF59E0B)
+    if (points.size >= 2) {
+        val linePath = Path().apply {
+            val first = points.first().first
+            moveTo(first.x, first.y)
+            for (i in 1 until points.size) {
+                val prev = points[i - 1].first
+                val cur = points[i].first
+                val midX = (prev.x + cur.x) / 2f
+                cubicTo(midX, prev.y, midX, cur.y, cur.x, cur.y)
+            }
+        }
+        val areaPath = Path().apply {
+            addPath(linePath)
+            lineTo(points.last().first.x, barZoneBottom)
+            lineTo(points.first().first.x, barZoneBottom)
+            close()
+        }
+        drawPath(
+            path = areaPath,
+            brush = Brush.verticalGradient(
+                colors = listOf(amberLine.copy(alpha = 0.15f), amberLine.copy(alpha = 0.01f)),
+                startY = scoreTop,
+                endY = barZoneBottom,
+            ),
+        )
+        drawPath(
+            path = linePath,
+            color = amberLine.copy(alpha = 0.80f),
+            style = Stroke(
+                width = (if (denseMode) 1.7.dp else 2.2.dp).toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+            ),
+        )
+    }
+
+    points.forEach { (pt, sc, _) ->
+        if (denseMode) {
+            drawCircle(
+                color = amberLine.copy(alpha = 0.88f),
+                radius = 2.dp.toPx(),
+                center = pt,
+            )
+        } else {
+            drawCircle(
+                color = Color.White.copy(alpha = 0.85f),
+                radius = 3.8.dp.toPx(),
+                center = pt,
+            )
+            drawCircle(
+                color = Color(sleepScoreColorInt(sc)).copy(alpha = 0.92f),
+                radius = 2.4.dp.toPx(),
+                center = pt,
+            )
         }
     }
 }

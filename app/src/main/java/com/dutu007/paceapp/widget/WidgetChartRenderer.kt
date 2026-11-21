@@ -4,9 +4,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
+import com.dutu007.paceapp.computeSleepScoreRange
 import com.dutu007.paceapp.data.DailyMetricPoint
 import com.dutu007.paceapp.extractClockHHMM
 import com.dutu007.paceapp.formatBarDurationLines
@@ -238,6 +242,69 @@ object WidgetChartRenderer {
             canvas.drawLine(sidePad, lineY, widthPx - sidePad, lineY, gridPaint)
         }
 
+        // Layer 2: Score trend line + soft vertical amber gradient behind bars
+        val (scoreMin, scoreMax) = computeSleepScoreRange(recent.mapNotNull { it.score })
+        val scoreTop = barZoneTop + 3f * scale
+        val scoreBottom = (barZoneBottom - 3f * scale).coerceAtLeast(scoreTop + 8f * scale)
+        val scoreSpan = (scoreMax - scoreMin).coerceAtLeast(1).toFloat()
+        val scorePts = buildList {
+            recent.forEachIndexed { idx, night ->
+                val sc = night.score?.takeIf { it > 0 } ?: return@forEachIndexed
+                val cx = sidePad + idx * slotW + slotW / 2f
+                val norm = ((sc - scoreMin) / scoreSpan).coerceIn(0f, 1f)
+                val cy = scoreTop + (1f - norm) * (scoreBottom - scoreTop)
+                add(Triple(cx, cy, sc))
+            }
+        }
+        if (scorePts.size >= 2) {
+            val linePath = Path().apply {
+                moveTo(scorePts.first().first, scorePts.first().second)
+                for (i in 1 until scorePts.size) {
+                    val prev = scorePts[i - 1]
+                    val cur = scorePts[i]
+                    val midX = (prev.first + cur.first) / 2f
+                    cubicTo(midX, prev.second, midX, cur.second, cur.first, cur.second)
+                }
+            }
+            val areaPath = Path().apply {
+                addPath(linePath)
+                lineTo(scorePts.last().first, barZoneBottom)
+                lineTo(scorePts.first().first, barZoneBottom)
+                close()
+            }
+            val areaPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                shader = LinearGradient(
+                    0f,
+                    scoreTop,
+                    0f,
+                    barZoneBottom,
+                    0x26F59E0B,
+                    0x03F59E0B,
+                    Shader.TileMode.CLAMP,
+                )
+            }
+            val trendLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+                strokeWidth = (if (compactMode) 1.7f else 2.0f) * scale
+                color = 0xCCF59E0B.toInt()
+            }
+            canvas.drawPath(areaPath, areaPaint)
+            canvas.drawPath(linePath, trendLinePaint)
+        }
+        val haloDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = 0xD9FFFFFF.toInt()
+        }
+        val innerDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        scorePts.forEach { (cx, cy, sc) ->
+            canvas.drawCircle(cx, cy, (if (compactMode) 2.8f else 3.3f) * scale, haloDotPaint)
+            innerDotPaint.color = (sleepScoreColorInt(sc) and 0x00FFFFFF) or (0xEB shl 24)
+            canvas.drawCircle(cx, cy, (if (compactMode) 1.8f else 2.1f) * scale, innerDotPaint)
+        }
+
         val scorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = (if (compactMode) 8.0f else 8.8f) * scale
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -245,8 +312,13 @@ object WidgetChartRenderer {
         }
         val scorePillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         val barFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        val hiStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF5B5CE2.toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 1.1f * scale
+        }
         val barStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFC5C7F8.toInt()
+            color = 0xC7B8BCFA.toInt()
             style = Paint.Style.STROKE
             strokeWidth = 1f * scale
         }
@@ -334,10 +406,11 @@ object WidgetChartRenderer {
             val barRect = RectF(left, topY, right, botY)
 
             if (isHi) {
-                barFillPaint.color = 0xFF5B5CE2.toInt()
+                barFillPaint.color = 0xC74344CE.toInt()
                 canvas.drawRoundRect(barRect, barRadius, barRadius, barFillPaint)
+                canvas.drawRoundRect(barRect, barRadius, barRadius, hiStrokePaint)
             } else {
-                barFillPaint.color = 0xFFE8E9FF.toInt()
+                barFillPaint.color = 0x9EE2E4FF.toInt()
                 canvas.drawRoundRect(barRect, barRadius, barRadius, barFillPaint)
                 canvas.drawRoundRect(barRect, barRadius, barRadius, barStrokePaint)
             }
@@ -356,7 +429,7 @@ object WidgetChartRenderer {
                 canvas.drawText(wakeClock, centerX, wakeBaseline, clockPaint)
             }
 
-            val insideColor = if (isHi) 0xFFFFFFFF.toInt() else 0xFF3B3DC0.toInt()
+            val insideColor = if (isHi) 0xFFFFFFFF.toInt() else 0xFF3537B0.toInt()
             val centerY = (topY + botY) / 2f
             val barH = botY - topY
             val (line1, line2) = formatBarDurationLines(night.durationMinutes)

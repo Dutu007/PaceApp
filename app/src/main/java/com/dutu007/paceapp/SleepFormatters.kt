@@ -103,6 +103,25 @@ fun formatBarDurationLines(minutes: Int): Pair<String, String?> {
 }
 
 /**
+ * Computes a clean `[minScore, maxScore]` Y-axis range for plotting sleep score trend lines:
+ * snaps to 5-point increments with breathing room and enforces a minimum 30-point span
+ * so small fluctuations aren't visually exaggerated.
+ */
+fun computeSleepScoreRange(scores: List<Int>): Pair<Int, Int> {
+    val valid = scores.filter { it > 0 }
+    if (valid.isEmpty()) return 50 to 100
+    val rawMin = valid.min()
+    val rawMax = valid.max()
+    var lo = (((rawMin - 8).coerceAtLeast(0)) / 5) * 5
+    var hi = ((((rawMax + 6).coerceAtMost(100)) + 4) / 5) * 5
+    if (hi - lo < 30) {
+        lo = (hi - 30).coerceAtLeast(0)
+        hi = (lo + 30).coerceAtMost(100)
+    }
+    return lo to hi
+}
+
+/**
  * Color-codes sleep quality scores for high readability on light surfaces.
  */
 fun sleepScoreColorInt(score: Int): Int {
