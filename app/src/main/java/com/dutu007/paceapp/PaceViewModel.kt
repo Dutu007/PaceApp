@@ -25,6 +25,9 @@ import com.dutu007.paceapp.data.PendingAttachment
 import com.dutu007.paceapp.data.SessionItem
 import com.dutu007.paceapp.data.ToolActivity
 import com.dutu007.paceapp.data.UserProfile
+import com.dutu007.paceapp.widget.PaceWidgetUpdater
+import com.dutu007.paceapp.widget.WidgetSyncManager
+import com.dutu007.paceapp.widget.WidgetSyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -143,6 +146,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             }
             refreshAll()
             checkForUpdate(manual = false)
+            WidgetSyncManager.ensurePeriodicSync(getApplication())
         } else {
             _uiState.update { it.copy(loading = false, authenticated = false) }
         }
@@ -332,6 +336,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 refreshAll()
                 checkForUpdate(manual = false)
+                WidgetSyncManager.ensurePeriodicSync(getApplication())
             } catch (e: Exception) {
                 _uiState.update { it.copy(authBusy = false) }
                 showNotice(e.toDisplayMessage(), isError = true)
@@ -344,6 +349,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.signOut()
             _uiState.value = PaceUiState(loading = false, authenticated = false)
+            PaceWidgetUpdater.updateAllWidgets(getApplication())
         }
     }
 
@@ -858,6 +864,12 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
 
     // -- Analytics Dashboard --
 
+    fun triggerWidgetRefresh() {
+        WidgetSyncManager.enqueueImmediateSync(getApplication(), WidgetSyncWorker.ACTION_REFRESH)
+        refreshAnalytics()
+        showNotice("已触发桌面组件同步")
+    }
+
     fun refreshAnalytics(range: String = _uiState.value.analyticsRange) {
         viewModelScope.launch {
             _uiState.update { it.copy(analyticsLoading = true) }
@@ -870,6 +882,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                         analytics = dashboard,
                     )
                 }
+                WidgetSyncManager.onDashboardLoadedInApp(getApplication(), dashboard)
             } catch (e: Exception) {
                 _uiState.update { it.copy(analyticsLoading = false) }
                 if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
@@ -891,6 +904,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 repository.labCheckIn(note)
                 val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
                 _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                WidgetSyncManager.onDashboardLoadedInApp(getApplication(), refreshed)
                 showNotice("已记录到达实验室，开始计时")
                 refreshDocs()
                 refreshGraph()
@@ -909,6 +923,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 repository.labCheckOut(note)
                 val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
                 _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                WidgetSyncManager.onDashboardLoadedInApp(getApplication(), refreshed)
                 val latest = refreshed.lab.recentSessions.firstOrNull { !it.leave.isNullOrBlank() }
                 val durationLabel = latest?.minutes?.let { formatDurationMinutes(it) } ?: "本次学习"
                 showNotice("已签退，$durationLabel 已计入实验室统计")
@@ -929,6 +944,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 repository.addLabSession(date = date, arrive = arrive, leave = leave, note = note)
                 val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
                 _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                WidgetSyncManager.onDashboardLoadedInApp(getApplication(), refreshed)
                 showNotice("已补录实验室学习时段")
                 refreshDocs()
                 refreshGraph()
@@ -947,6 +963,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 repository.deleteLabSession(arrive)
                 val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
                 _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                WidgetSyncManager.onDashboardLoadedInApp(getApplication(), refreshed)
                 showNotice("已删除该学习记录")
                 refreshDocs()
                 refreshGraph()
@@ -979,6 +996,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
                 _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                WidgetSyncManager.onDashboardLoadedInApp(getApplication(), refreshed)
                 showNotice("已保存 $date 睡眠记录")
                 refreshDocs()
                 refreshGraph()

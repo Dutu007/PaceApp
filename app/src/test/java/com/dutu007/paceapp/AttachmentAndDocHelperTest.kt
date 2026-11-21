@@ -1,5 +1,6 @@
 package com.dutu007.paceapp
 
+import com.dutu007.paceapp.widget.computeNormalizedBarRatios
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -93,5 +94,15 @@ class AttachmentAndDocHelperTest {
         assertEquals("2h", formatDurationMinutes(120))
         assertEquals("2h 8m", formatDurationMinutes(128))
         assertEquals("0m", formatDurationMinutes(-10))
+    }
+
+    @Test
+    fun computesNormalizedWidgetBarRatios() {
+        assertTrue(computeNormalizedBarRatios(emptyList()).isEmpty())
+        assertEquals(listOf(0f, 0f), computeNormalizedBarRatios(listOf(0.0, 0.0)))
+        val ratios = computeNormalizedBarRatios(listOf(0.0, 1.0, 100.0))
+        assertEquals(0f, ratios[0], 0.0001f)
+        assertEquals(0.10f, ratios[1], 0.0001f)
+        assertEquals(1.0f, ratios[2], 0.0001f)
     }
 }

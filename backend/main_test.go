@@ -661,6 +661,34 @@ func TestAnalyticsDashboardAndMutations(t *testing.T) {
 	if !dash2.Sleep.HasData || dash2.Sleep.LatestDurationMinutes != 470 {
 		t.Fatalf("expected sleep duration 470 min (23:30->07:20), got %+v", dash2.Sleep)
 	}
+
+	// Verify structured running/records.json merge preserves image_path & notes.json note when note is omitted
+	runYear := time.Now().In(srv.docs.tz).Year()
+	_ = os.MkdirAll(filepath.Join(srv.docs.assistantDir, "running"), 0o755)
+	_ = os.WriteFile(filepath.Join(srv.docs.assistantDir, "running", "records.json"), []byte(fmt.Sprintf(`{
+		"records": [
+			{"date": "%d-11-19", "distance_km": 3.75, "duration_minutes": 30, "pace": "7'52\"/km", "source": "keep"},
+			{"date": "%d-11-20", "distance_km": 3.68, "duration_minutes": 34, "pace": "9'07\"/km", "source": "coros", "note": "慢跑恢复"}
+		]
+	}`, runYear, runYear)), 0o644)
+
+	r3 := doJSON(http.MethodGet, api.URL+"/api/v1/analytics?range=30d", "")
+	var dash3 analyticsDashboardResponse
+	_ = json.NewDecoder(r3.Body).Decode(&dash3)
+	r3.Body.Close()
+	if dash3.Running.TotalRuns != 2 || dash3.Running.TotalDistanceKm != 7.43 {
+		t.Fatalf("expected 2 runs totaling 7.43 km, got %+v", dash3.Running)
+	}
+	var merged19 *runningRecordItem
+	for i := range dash3.Running.RecentRuns {
+		if dash3.Running.RecentRuns[i].Date == fmt.Sprintf("%d-11-19", runYear) {
+			merged19 = &dash3.Running.RecentRuns[i]
+			break
+		}
+	}
+	if merged19 == nil || merged19.ImagePath != "images/running/跑步_11-19.jpg" || merged19.Note != "简单慢跑3.75km" {
+		t.Fatalf("expected merged 11-19 to preserve image_path and note, got %+v", merged19)
+	}
 }
 
 func newTestZip(buf *bytes.Buffer) *zip.Writer {

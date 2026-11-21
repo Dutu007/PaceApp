@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">Pace</string>
+    <string name="widget_lab_label">实验室学习时长</string>
+    <string name="widget_lab_desc">展示今日与近7天实验室学习趋势，支持桌面一键打卡/签退</string>
+    <string name="widget_sleep_label">睡眠时长趋势</string>
+    <string name="widget_sleep_desc">展示最近睡眠时长、评分与近7天趋势图</string>
 </resources>

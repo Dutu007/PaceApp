@@ -1,6 +1,7 @@
 package com.dutu007.paceapp
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,11 +18,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -29,6 +33,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,9 +46,18 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.dutu007.paceapp.ui.theme.PacePalette
+import com.dutu007.paceapp.widget.LabStudyWidgetProvider
+import com.dutu007.paceapp.widget.OriginOsKeepAliveHelper
+import com.dutu007.paceapp.widget.SleepTrendWidgetProvider
+import com.dutu007.paceapp.widget.WidgetDataStore
 
 val SettingsIcon = ImageVector.Builder(
     name = "Settings",
@@ -244,6 +262,22 @@ fun SettingsScreen(
 ) {
     BackHandler(onBack = onBack)
 
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var ignoringBattery by remember { mutableStateOf(OriginOsKeepAliveHelper.isIgnoringBatteryOptimizations(context)) }
+    var lastWidgetSync by remember(state.analytics) { mutableStateOf(WidgetDataStore.lastSyncFormatted(context)) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ignoringBattery = OriginOsKeepAliveHelper.isIgnoringBatteryOptimizations(context)
+                lastWidgetSync = WidgetDataStore.lastSyncFormatted(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val hermesStatus = when (state.hermesOnline) {
         true -> "在线"
         false -> "离线"
@@ -326,6 +360,115 @@ fun SettingsScreen(
                         subtitle = updateSubtitle,
                         onClick = { if (!state.checkingUpdate) viewModel.checkForUpdate(manual = true) },
                     )
+                }
+
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("桌面原子组件与后台保活（OriginOS / iQOO）", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "将实验室学习时长与睡眠曲线固定到桌面；若系统不支持直接推送，可在桌面长按或上滑原子组件库搜索 Pace 添加。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val ok = OriginOsKeepAliveHelper.requestPinWidget(context, LabStudyWidgetProvider::class.java)
+                                        viewModel.notifyHint(
+                                            if (ok) "已发起添加「实验室学习时长」组件" else "请在桌面长按空白处 -> 原子组件添加 Pace 组件",
+                                            isError = !ok,
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("添加学习组件", fontSize = 12.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        val ok = OriginOsKeepAliveHelper.requestPinWidget(context, SleepTrendWidgetProvider::class.java)
+                                        viewModel.notifyHint(
+                                            if (ok) "已发起添加「睡眠时长趋势」组件" else "请在桌面长按空白处 -> 原子组件添加 Pace 组件",
+                                            isError = !ok,
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("添加睡眠组件", fontSize = 12.sp)
+                                }
+                            }
+                            HorizontalDivider(thickness = 0.5.dp, color = PacePalette.CardBorder)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !ignoringBattery) {
+                                        OriginOsKeepAliveHelper.requestIgnoreBatteryOptimizations(context)
+                                    }
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("忽略电池优化", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        if (ignoringBattery) "已开启（允许后台定时更新桌面组件）" else "未开启，点击去系统授权无限制后台",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (ignoringBattery) PacePalette.Success else PacePalette.AccentAmber,
+                                    )
+                                }
+                                if (!ignoringBattery) {
+                                    Text("去开启 ›", style = MaterialTheme.typography.labelMedium, color = PacePalette.Primary)
+                                }
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { OriginOsKeepAliveHelper.openOriginOsAutostartSettings(context) }
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("iQOO 自启动与后台高耗电设置", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "开启自启动 + 允许后台高耗电 + 多任务下拉锁定，桌面每 15 分钟自动更新",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Text("打开 ›", style = MaterialTheme.typography.labelMedium, color = PacePalette.Primary)
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = PacePalette.Background,
+                                border = BorderStroke(1.dp, PacePalette.CardBorder),
+                                onClick = {
+                                    viewModel.triggerWidgetRefresh()
+                                    lastWidgetSync = WidgetDataStore.lastSyncFormatted(context)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("立即同步桌面组件", style = MaterialTheme.typography.labelLarge, color = PacePalette.Primary)
+                                    Text(lastWidgetSync, style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary)
+                                }
+                            }
+                        }
+                    }
                 }
 
                 item {

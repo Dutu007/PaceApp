@@ -407,8 +407,13 @@ func (d *docStore) loadRunningRecords(now time.Time) []runningRecordItem {
 				if !dateYMDPattern.MatchString(dStr) {
 					continue
 				}
-				if existing, ok := byDate[dStr]; ok && rec.ImagePath == "" {
-					rec.ImagePath = existing.ImagePath
+				if existing, ok := byDate[dStr]; ok {
+					if rec.ImagePath == "" {
+						rec.ImagePath = existing.ImagePath
+					}
+					if rec.Note == "" {
+						rec.Note = existing.Note
+					}
 				}
 				if rec.DistanceKm <= 0 && rec.Note != "" {
 					rec.DistanceKm = extractDistanceKm(rec.Note)

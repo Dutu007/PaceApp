@@ -114,8 +114,11 @@ private val DocsTabIcon = ImageVector.Builder(
 }.build()
 
 class MainActivity : ComponentActivity() {
+    private var pendingOpenTab by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingOpenTab = intent?.getStringExtra(EXTRA_OPEN_TAB)
         val transparent = Color.Transparent.toArgb()
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.light(transparent, transparent),
@@ -123,20 +126,46 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             PaceTheme {
-                PaceAppRoot()
+                PaceAppRoot(
+                    pendingOpenTab = pendingOpenTab,
+                    onConsumePendingTab = { pendingOpenTab = null },
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingOpenTab = intent.getStringExtra(EXTRA_OPEN_TAB)
+    }
+
+    companion object {
+        const val EXTRA_OPEN_TAB = "pace_open_tab"
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
+private fun PaceAppRoot(
+    viewModel: PaceViewModel = viewModel(),
+    pendingOpenTab: String? = null,
+    onConsumePendingTab: () -> Unit = {},
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
     var showSessionSheet by remember { mutableStateOf(false) }
     val imeVisible = WindowInsets.isImeVisible
+
+    LaunchedEffect(pendingOpenTab, state.authenticated) {
+        if (state.authenticated && !pendingOpenTab.isNullOrBlank()) {
+            if (pendingOpenTab == "ANALYTICS") {
+                viewModel.selectTab(PaceTab.ANALYTICS)
+            }
+            onConsumePendingTab()
+        }
+    }
 
     val notice = state.notice
     LaunchedEffect(notice?.id) {

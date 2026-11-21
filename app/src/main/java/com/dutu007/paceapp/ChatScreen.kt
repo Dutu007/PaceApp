@@ -101,15 +101,17 @@ fun ChatScreen(
     var sessionToManage by remember { mutableStateOf<SessionItem?>(null) }
     var renameText by remember { mutableStateOf("") }
     var previewTarget by remember { mutableStateOf<InAppPreviewTarget?>(null) }
+    val reversedMessages = remember(state.messages) { state.messages.asReversed() }
 
-    LaunchedEffect(
-        state.activeSessionId,
-        state.messages.lastOrNull()?.id,
-        state.messages.lastOrNull()?.content,
-    ) {
+    LaunchedEffect(state.activeSessionId) {
         if (state.messages.isNotEmpty()) {
-            val targetIdx = state.messages.lastIndex + if (state.hasOlderMessages) 1 else 0
-            listState.animateScrollToItem(targetIdx.coerceAtLeast(0))
+            listState.scrollToItem(0)
+        }
+    }
+
+    LaunchedEffect(state.messages.lastOrNull()?.id, state.messages.lastOrNull()?.content) {
+        if (state.messages.isNotEmpty() && listState.firstVisibleItemIndex <= 1) {
+            listState.scrollToItem(0)
         }
     }
 
@@ -186,10 +188,36 @@ fun ChatScreen(
                 else -> {
                     LazyColumn(
                         state = listState,
+                        reverseLayout = true,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.Bottom),
                     ) {
+                        items(reversedMessages, key = { it.id }) { msg ->
+                            MessageItem(
+                                message = msg,
+                                onPinCard = viewModel::pinCardToBoard,
+                                onSaveText = viewModel::saveTextAsEntry,
+                                onOpenChip = { chip ->
+                                    previewTarget = if (chip.docPath != null) {
+                                        InAppPreviewTarget.ServerDoc(
+                                            title = chip.label,
+                                            docPath = chip.docPath,
+                                            mimeType = mimeTypeForFileName(chip.label),
+                                        )
+                                    } else if (chip.localUri != null) {
+                                        InAppPreviewTarget.LocalUri(
+                                            title = chip.label,
+                                            uriString = chip.localUri,
+                                            mimeType = mimeTypeForFileName(chip.label, fallback = if (chip.isImage) "image/*" else "*/*"),
+                                            isImage = chip.isImage,
+                                        )
+                                    } else {
+                                        null
+                                    }
+                                },
+                            )
+                        }
                         if (state.hasOlderMessages) {
                             item(key = "load_older_header") {
                                 Box(
@@ -226,31 +254,6 @@ fun ChatScreen(
                                     }
                                 }
                             }
-                        }
-                        items(state.messages, key = { it.id }) { msg ->
-                            MessageItem(
-                                message = msg,
-                                onPinCard = viewModel::pinCardToBoard,
-                                onSaveText = viewModel::saveTextAsEntry,
-                                onOpenChip = { chip ->
-                                    previewTarget = if (chip.docPath != null) {
-                                        InAppPreviewTarget.ServerDoc(
-                                            title = chip.label,
-                                            docPath = chip.docPath,
-                                            mimeType = mimeTypeForFileName(chip.label),
-                                        )
-                                    } else if (chip.localUri != null) {
-                                        InAppPreviewTarget.LocalUri(
-                                            title = chip.label,
-                                            uriString = chip.localUri,
-                                            mimeType = mimeTypeForFileName(chip.label, fallback = if (chip.isImage) "image/*" else "*/*"),
-                                            isImage = chip.isImage,
-                                        )
-                                    } else {
-                                        null
-                                    }
-                                },
-                            )
                         }
                     }
                 }

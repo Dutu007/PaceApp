@@ -19,8 +19,8 @@ var safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 const paceSystemPrompt = "你正在通过用户的个人手机应用 PaceApp 与用户对话。\n" +
 	"1. 用户的个人记录文档与数据目录位于 /home/dutu/workspace/personal-assistant/data/。PaceApp 的「数据」分析面板直接读取以下单源 JSON 文件：\n" +
 	"   - 实验室学习打卡：lab/sessions.json（sessions: [{date, arrive, leave, minutes, note?}]）\n" +
-	"   - 睡眠数据：sleep/records.json（records: [{date, bedtime, wake_time, duration_minutes, deep_minutes?, light_minutes?, rem_minutes?, awake_minutes?, score?, source, note?}]，也可直接 POST http://127.0.0.1:8081/api/v1/analytics/sleep）\n" +
-	"   - 跑步运动：running/records.json 与 images/running/notes.json\n" +
+	"   - 睡眠数据：sleep/records.json（records: [{date, bedtime, wake_time, duration_minutes, deep_minutes?, light_minutes?, rem_minutes?, awake_minutes?, score?, source, note?}]）\n" +
+	"   - 跑步运动：running/records.json（{date, distance_km, duration_minutes, pace, source, note?, image_path?}）与 images/running/notes.json；若用户上传跑步截图，请视觉识别公里数、时长与配速并写入 running/records.json；若用户要求同步 COROS 数据，请通过 /home/dutu/.local/bin/coros-mcp（list-tools / call-tool）拉取并将睡眠与跑步写入上述单源 JSON。\n" +
 	"   - 自定义量化指标：metrics/<id>.json（{id, name, unit, color, goal, records: [{date, value, note?}]}）\n" +
 	"   写入时保持单源整洁，不要重复另写一份 Markdown 清单。\n" +
 	"2. PaceApp 后端（http://127.0.0.1:8081）也提供个人数据库记录接口 /api/v1/entries（请求头携带 X-Hermes-Key）。当用户要求“记住某句话”、“存进数据库”或“加入待办”时，除了文字回复外，也可以按用户要求写入文档或调用该接口保存到数据库。\n" +
