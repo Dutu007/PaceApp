@@ -56,10 +56,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1124,21 +1128,11 @@ private fun SleepScheduleChart(
     val hasAnyWindow = validWindows.any { it != null }
     val minAxisMinutes = remember(validWindows) {
         val rawMin = validWindows.filterNotNull().minOfOrNull { it.first } ?: (22 * 60)
-        val flooredHour = floor(rawMin / 60.0).toInt() * 60
-        (flooredHour - 60).coerceAtLeast(18 * 60)
+        (floor(rawMin / 30.0).toInt() * 30).coerceAtLeast(18 * 60)
     }
     val maxAxisMinutes = remember(validWindows, minAxisMinutes) {
         val rawMax = validWindows.filterNotNull().maxOfOrNull { it.second } ?: (32 * 60)
-        val ceiledHour = ceil(rawMax / 60.0).toInt() * 60
-        maxOf(minAxisMinutes + 4 * 60, ceiledHour + 60)
-    }
-    val axisTicks = remember(minAxisMinutes, maxAxisMinutes) {
-        listOf(
-            minAxisMinutes,
-            minAxisMinutes + (maxAxisMinutes - minAxisMinutes) / 3,
-            minAxisMinutes + ((maxAxisMinutes - minAxisMinutes) * 2) / 3,
-            maxAxisMinutes,
-        )
+        maxOf(minAxisMinutes + 4 * 60, ceil(rawMax / 30.0).toInt() * 30)
     }
     val maxDuration = remember(nights) {
         nights.maxOfOrNull { it.durationMinutes }?.coerceAtLeast(60) ?: 480
@@ -1263,95 +1257,47 @@ private fun SleepScheduleChart(
         }
 
         val isSevenOrFewer = nights.size <= 7
-        val railWidth = 36.dp
+        val gridColor = PacePalette.CardBorder
+        val textMeasurer = rememberTextMeasurer()
 
         if (isSevenOrFewer) {
-            // Structured per-column headers: Duration + Score
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "时长",
-                    fontSize = 9.sp,
-                    color = PacePalette.TextSecondary,
-                    modifier = Modifier.width(railWidth),
-                )
-                nights.forEachIndexed { idx, night ->
-                    Text(
-                        text = formatCompactDuration(night.durationMinutes),
-                        fontSize = 9.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.Medium,
-                        color = when {
-                            night.durationMinutes <= 0 -> PacePalette.TextSecondary.copy(alpha = 0.55f)
-                            idx == safeIndex -> SleepAccent
-                            else -> PacePalette.TextPrimary
-                        },
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "分数",
-                    fontSize = 9.sp,
-                    color = PacePalette.TextSecondary,
-                    modifier = Modifier.width(railWidth),
-                )
+            // Top uniform Score row across all columns
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 nights.forEachIndexed { idx, night ->
                     val sc = night.score?.takeIf { it > 0 }
-                    Text(
-                        text = sc?.let { "${it}分" } ?: "--",
-                        fontSize = 9.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.SemiBold,
-                        color = sc?.let { Color(sleepScoreColorInt(it)) } ?: PacePalette.TextSecondary.copy(alpha = 0.55f),
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        softWrap = false,
+                    val scColor = sc?.let { Color(sleepScoreColorInt(it)) } ?: PacePalette.TextSecondary.copy(alpha = 0.55f)
+                    Box(
                         modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
-
-        // Bedtime-to-wake floating capsule plot with Y-axis time labels on the left
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(126.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier
-                    .width(railWidth)
-                    .height(126.dp)
-                    .padding(vertical = 2.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-            ) {
-                if (hasAnyWindow) {
-                    axisTicks.forEach { tick ->
-                        Text(
-                            text = formatAxisOffsetClock(tick),
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = PacePalette.TextSecondary,
-                            maxLines = 1,
-                            softWrap = false,
-                        )
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = if (idx == safeIndex && sc != null) scColor.copy(alpha = 0.12f) else Color.Transparent,
+                        ) {
+                            Text(
+                                text = sc?.let { "${it}分" } ?: "--",
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = scColor,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                            )
+                        }
                     }
-                } else {
-                    Text(formatCompactDuration(maxDuration), fontSize = 9.sp, color = PacePalette.TextSecondary)
-                    Text("0m", fontSize = 9.sp, color = PacePalette.TextSecondary)
                 }
             }
 
-            val gridColor = PacePalette.CardBorder
-            Box(
+            // Middle full-width floating bars: bedtime above top cap, duration inside bar, wake below bottom cap
+            Canvas(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxSize()
+                    .fillMaxWidth()
+                    .height(204.dp)
                     .pointerInput(nights) {
                         detectTapGestures { offset ->
                             val slot = size.width.toFloat() / nights.size.coerceAtLeast(1)
@@ -1360,146 +1306,173 @@ private fun SleepScheduleChart(
                         }
                     },
             ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val w = size.width
-                    val h = size.height
-                    val count = nights.size.coerceAtLeast(1)
-                    val slotW = w / count
-                    val capsuleW = minOf(18.dp.toPx(), maxOf(5.dp.toPx(), slotW * 0.44f))
-                    val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
+                val w = size.width
+                val h = size.height
+                val count = nights.size.coerceAtLeast(1)
+                val slotW = w / count
+                val barW = minOf(38.dp.toPx(), maxOf(22.dp.toPx(), slotW * 0.72f))
+                val topLabelSpace = 16.dp.toPx()
+                val botLabelSpace = 16.dp.toPx()
+                val barZoneTop = topLabelSpace
+                val barZoneBottom = h - botLabelSpace
+                val barZoneH = (barZoneBottom - barZoneTop).coerceAtLeast(40.dp.toPx())
+                val minBarH = 26.dp.toPx()
+                val corner = CornerRadius(10.dp.toPx(), 10.dp.toPx())
+                val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
 
-                    listOf(0.06f, 0.35f, 0.65f, 0.94f).forEach { frac ->
-                        val y = h * frac
-                        drawLine(
-                            color = gridColor.copy(alpha = 0.8f),
-                            start = Offset(0f, y),
-                            end = Offset(w, y),
-                            strokeWidth = 1.dp.toPx(),
-                            pathEffect = dash,
+                listOf(0f, 0.33f, 0.67f, 1f).forEach { frac ->
+                    val y = barZoneTop + barZoneH * frac
+                    drawLine(
+                        color = gridColor.copy(alpha = 0.72f),
+                        start = Offset(0f, y),
+                        end = Offset(w, y),
+                        strokeWidth = 1.dp.toPx(),
+                        pathEffect = dash,
+                    )
+                }
+
+                val axisSpan = (maxAxisMinutes - minAxisMinutes).coerceAtLeast(1).toFloat()
+
+                nights.forEachIndexed { idx, night ->
+                    val centerX = idx * slotW + slotW / 2f
+                    val left = centerX - barW / 2f
+                    val isSelected = idx == safeIndex
+                    val win = validWindows[idx]
+
+                    if (night.durationMinutes <= 0) {
+                        drawCircle(
+                            color = gridColor,
+                            radius = 2.5.dp.toPx(),
+                            center = Offset(centerX, (barZoneTop + barZoneBottom) / 2f),
+                        )
+                        return@forEachIndexed
+                    }
+
+                    val (topY, botY) = if (win != null) {
+                        val rawTop = barZoneTop + ((win.first - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * barZoneH
+                        val rawBot = barZoneTop + ((win.second - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * barZoneH
+                        if (rawBot - rawTop < minBarH) {
+                            val mid = (rawTop + rawBot) / 2f
+                            val clampedTop = (mid - minBarH / 2f).coerceIn(barZoneTop, barZoneBottom - minBarH)
+                            clampedTop to (clampedTop + minBarH)
+                        } else {
+                            rawTop to rawBot
+                        }
+                    } else {
+                        val ratio = (night.durationMinutes.toFloat() / maxDuration.toFloat()).coerceIn(0.15f, 1f)
+                        val barH = maxOf(minBarH, barZoneH * ratio)
+                        (barZoneBottom - barH) to barZoneBottom
+                    }
+                    val barH = botY - topY
+
+                    if (isSelected) {
+                        drawRoundRect(
+                            color = SleepAccent,
+                            topLeft = Offset(left, topY),
+                            size = Size(barW, barH),
+                            cornerRadius = corner,
+                        )
+                    } else {
+                        drawRoundRect(
+                            color = Color(0xFFE8E9FF),
+                            topLeft = Offset(left, topY),
+                            size = Size(barW, barH),
+                            cornerRadius = corner,
+                        )
+                        drawRoundRect(
+                            color = Color(0xFFC5C7F8),
+                            topLeft = Offset(left, topY),
+                            size = Size(barW, barH),
+                            cornerRadius = corner,
+                            style = Stroke(width = 1.dp.toPx()),
                         )
                     }
 
-                    val axisSpan = (maxAxisMinutes - minAxisMinutes).coerceAtLeast(1).toFloat()
-                    val padY = h * 0.06f
-                    val usableH = h - 2f * padY
+                    val clockStyle = TextStyle(
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isSelected) SleepAccent else PacePalette.TextSecondary,
+                    )
+                    if (night.bedtimeHHMM.isNotBlank()) {
+                        val bedLayout = textMeasurer.measure(
+                            text = night.bedtimeHHMM,
+                            style = clockStyle,
+                            softWrap = false,
+                            maxLines = 1,
+                        )
+                        val bedX = (centerX - bedLayout.size.width / 2f)
+                            .coerceIn(0f, (w - bedLayout.size.width).coerceAtLeast(0f))
+                        val bedY = (topY - bedLayout.size.height - 2.5.dp.toPx()).coerceAtLeast(0f)
+                        drawText(bedLayout, topLeft = Offset(bedX, bedY))
+                    }
+                    if (night.wakeHHMM.isNotBlank()) {
+                        val wakeLayout = textMeasurer.measure(
+                            text = night.wakeHHMM,
+                            style = clockStyle,
+                            softWrap = false,
+                            maxLines = 1,
+                        )
+                        val wakeX = (centerX - wakeLayout.size.width / 2f)
+                            .coerceIn(0f, (w - wakeLayout.size.width).coerceAtLeast(0f))
+                        val wakeY = (botY + 2.5.dp.toPx())
+                            .coerceAtMost((h - wakeLayout.size.height).coerceAtLeast(0f))
+                        drawText(wakeLayout, topLeft = Offset(wakeX, wakeY))
+                    }
 
-                    nights.forEachIndexed { idx, night ->
-                        val centerX = idx * slotW + slotW / 2f
-                        val left = centerX - capsuleW / 2f
-                        val isSelected = idx == safeIndex
-                        val win = validWindows[idx]
-
-                        if (night.durationMinutes > 0 && win != null) {
-                            val topY = padY + ((win.first - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * usableH
-                            val rawBotY = padY + ((win.second - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * usableH
-                            val botY = maxOf(topY + 10.dp.toPx(), rawBotY)
-                            val capH = (botY - topY).coerceAtLeast(10.dp.toPx())
-                            if (isSelected) {
-                                drawRoundRect(
-                                    color = SleepAccentSoft.copy(alpha = 0.85f),
-                                    topLeft = Offset(centerX - capsuleW * 0.72f, topY - 3.dp.toPx()),
-                                    size = Size(capsuleW * 1.44f, capH + 6.dp.toPx()),
-                                    cornerRadius = CornerRadius(999f, 999f),
-                                )
-                            }
-                            val fill = if (isSelected) SleepAccent else SleepAccent.copy(alpha = 0.46f)
-                            drawRoundRect(
-                                color = fill,
-                                topLeft = Offset(left, topY),
-                                size = Size(capsuleW, capH),
-                                cornerRadius = CornerRadius(capsuleW / 2f, capsuleW / 2f),
-                            )
-                            val dotR = minOf(capsuleW * 0.24f, 2.4.dp.toPx())
-                            drawCircle(
-                                color = Color.White.copy(alpha = if (isSelected) 0.92f else 0.75f),
-                                radius = dotR,
-                                center = Offset(centerX, topY + dotR + 2.dp.toPx()),
-                            )
-                            drawCircle(
-                                color = Color.White.copy(alpha = if (isSelected) 0.92f else 0.75f),
-                                radius = dotR,
-                                center = Offset(centerX, topY + capH - dotR - 2.dp.toPx()),
-                            )
-                        } else if (night.durationMinutes > 0) {
-                            val ratio = (night.durationMinutes.toFloat() / maxDuration.toFloat()).coerceIn(0.12f, 1f)
-                            val barH = maxOf(8.dp.toPx(), usableH * ratio)
-                            val barTop = h - padY - barH
-                            drawRoundRect(
-                                color = if (isSelected) SleepAccent else SleepAccent.copy(alpha = 0.35f),
-                                topLeft = Offset(left, barTop),
-                                size = Size(capsuleW, barH),
-                                cornerRadius = CornerRadius(capsuleW / 2f, capsuleW / 2f),
-                            )
-                        } else {
-                            drawCircle(
-                                color = gridColor,
-                                radius = 2.dp.toPx(),
-                                center = Offset(centerX, h * 0.5f),
-                            )
-                        }
+                    val insideColor = if (isSelected) Color.White else Color(0xFF3F40B8)
+                    val centerY = (topY + botY) / 2f
+                    val (line1, line2) = formatBarDurationLines(night.durationMinutes)
+                    if (line2 != null && barH >= 28.dp.toPx()) {
+                        val l1 = textMeasurer.measure(
+                            text = line1,
+                            style = TextStyle(
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = insideColor,
+                            ),
+                            softWrap = false,
+                            maxLines = 1,
+                        )
+                        val l2 = textMeasurer.measure(
+                            text = line2,
+                            style = TextStyle(
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                color = insideColor.copy(alpha = 0.9f),
+                            ),
+                            softWrap = false,
+                            maxLines = 1,
+                        )
+                        val gap = (-1).dp.toPx()
+                        val totalH = l1.size.height + l2.size.height + gap
+                        val top1 = centerY - totalH / 2f
+                        drawText(l1, topLeft = Offset(centerX - l1.size.width / 2f, top1))
+                        drawText(l2, topLeft = Offset(centerX - l2.size.width / 2f, top1 + l1.size.height + gap))
+                    } else {
+                        val single = textMeasurer.measure(
+                            text = formatCompactDuration(night.durationMinutes),
+                            style = TextStyle(
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = insideColor,
+                            ),
+                            softWrap = false,
+                            maxLines = 1,
+                        )
+                        drawText(
+                            single,
+                            topLeft = Offset(centerX - single.size.width / 2f, centerY - single.size.height / 2f),
+                        )
                     }
                 }
             }
-        }
 
-        if (isSevenOrFewer) {
+            // Bottom X-axis: date + weekday
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "入睡",
-                    fontSize = 9.sp,
-                    color = PacePalette.TextSecondary,
-                    modifier = Modifier.width(railWidth),
-                )
-                nights.forEachIndexed { idx, night ->
-                    Text(
-                        text = night.bedtimeHHMM.ifBlank { "--" },
-                        fontSize = 9.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.Normal,
-                        color = if (night.bedtimeHHMM.isNotBlank()) {
-                            if (idx == safeIndex) SleepAccent else PacePalette.TextPrimary
-                        } else {
-                            PacePalette.TextSecondary.copy(alpha = 0.55f)
-                        },
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "醒来",
-                    fontSize = 9.sp,
-                    color = PacePalette.TextSecondary,
-                    modifier = Modifier.width(railWidth),
-                )
-                nights.forEachIndexed { idx, night ->
-                    Text(
-                        text = night.wakeHHMM.ifBlank { "--" },
-                        fontSize = 9.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.Normal,
-                        color = if (night.wakeHHMM.isNotBlank()) {
-                            if (idx == safeIndex) SleepAccent else PacePalette.TextPrimary
-                        } else {
-                            PacePalette.TextSecondary.copy(alpha = 0.55f)
-                        },
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "日期",
-                    fontSize = 9.sp,
-                    color = PacePalette.TextSecondary,
-                    modifier = Modifier.width(railWidth),
-                )
                 nights.forEachIndexed { idx, night ->
                     Column(
                         modifier = Modifier.weight(1f),
@@ -1507,7 +1480,7 @@ private fun SleepScheduleChart(
                     ) {
                         Text(
                             text = night.shortDate,
-                            fontSize = 9.sp,
+                            fontSize = 9.5.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.Normal,
                             color = if (idx == safeIndex) SleepAccent else PacePalette.TextSecondary,
@@ -1525,6 +1498,75 @@ private fun SleepScheduleChart(
                 }
             }
         } else {
+            // Multi-week calendar mode (> 7 days): full-width floating capsules + 5 date ticks
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(140.dp)
+                    .pointerInput(nights) {
+                        detectTapGestures { offset ->
+                            val slot = size.width.toFloat() / nights.size.coerceAtLeast(1)
+                            val idx = (offset.x / slot).toInt().coerceIn(0, nights.lastIndex)
+                            selectedIndex = idx
+                        }
+                    },
+            ) {
+                val w = size.width
+                val h = size.height
+                val count = nights.size.coerceAtLeast(1)
+                val slotW = w / count
+                val capsuleW = minOf(12.dp.toPx(), maxOf(4.dp.toPx(), slotW * 0.56f))
+                val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
+                val padY = h * 0.06f
+                val usableH = h - 2f * padY
+
+                listOf(0f, 0.33f, 0.67f, 1f).forEach { frac ->
+                    val y = padY + usableH * frac
+                    drawLine(
+                        color = gridColor.copy(alpha = 0.72f),
+                        start = Offset(0f, y),
+                        end = Offset(w, y),
+                        strokeWidth = 1.dp.toPx(),
+                        pathEffect = dash,
+                    )
+                }
+
+                val axisSpan = (maxAxisMinutes - minAxisMinutes).coerceAtLeast(1).toFloat()
+                nights.forEachIndexed { idx, night ->
+                    val centerX = idx * slotW + slotW / 2f
+                    val left = centerX - capsuleW / 2f
+                    val isSelected = idx == safeIndex
+                    val win = validWindows[idx]
+
+                    if (night.durationMinutes > 0 && win != null) {
+                        val topY = padY + ((win.first - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * usableH
+                        val rawBotY = padY + ((win.second - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * usableH
+                        val capH = maxOf(10.dp.toPx(), rawBotY - topY)
+                        drawRoundRect(
+                            color = if (isSelected) SleepAccent else SleepAccent.copy(alpha = 0.45f),
+                            topLeft = Offset(left, topY),
+                            size = Size(capsuleW, capH),
+                            cornerRadius = CornerRadius(capsuleW / 2f, capsuleW / 2f),
+                        )
+                    } else if (night.durationMinutes > 0) {
+                        val ratio = (night.durationMinutes.toFloat() / maxDuration.toFloat()).coerceIn(0.12f, 1f)
+                        val barH = maxOf(8.dp.toPx(), usableH * ratio)
+                        drawRoundRect(
+                            color = if (isSelected) SleepAccent else SleepAccent.copy(alpha = 0.35f),
+                            topLeft = Offset(left, h - padY - barH),
+                            size = Size(capsuleW, barH),
+                            cornerRadius = CornerRadius(capsuleW / 2f, capsuleW / 2f),
+                        )
+                    } else {
+                        drawCircle(
+                            color = gridColor,
+                            radius = 2.dp.toPx(),
+                            center = Offset(centerX, h * 0.5f),
+                        )
+                    }
+                }
+            }
+
             val tickIndices = remember(nights.size) {
                 listOf(
                     0,
@@ -1537,7 +1579,7 @@ private fun SleepScheduleChart(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = railWidth, end = 4.dp),
+                    .padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 tickIndices.forEach { idx ->

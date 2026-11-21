@@ -149,6 +149,11 @@ class AttachmentAndDocHelperTest {
         assertEquals("9h", formatCompactDuration(540))
         assertEquals("45m", formatCompactDuration(45))
 
+        assertEquals("--" to null, formatBarDurationLines(0))
+        assertEquals("8h" to "03m", formatBarDurationLines(483))
+        assertEquals("9h" to null, formatBarDurationLines(540))
+        assertEquals("45m" to null, formatBarDurationLines(45))
+
         assertEquals(0xFF0E9F6E.toInt(), sleepScoreColorInt(90))
         assertEquals(0xFFD97706.toInt(), sleepScoreColorInt(77))
         assertEquals(0xFFDC2626.toInt(), sleepScoreColorInt(57))

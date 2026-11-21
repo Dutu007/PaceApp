@@ -88,6 +88,21 @@ fun formatCompactDuration(minutes: Int): String {
 }
 
 /**
+ * Splits sleep duration into 1 or 2 compact stacked lines (`"8h"` + `"03m"`, `"9h"`, `"45m"`)
+ * for centering cleanly inside narrow floating sleep bars.
+ */
+fun formatBarDurationLines(minutes: Int): Pair<String, String?> {
+    if (minutes <= 0) return "--" to null
+    val hours = minutes / 60
+    val mins = minutes % 60
+    return when {
+        hours == 0 -> "${mins}m" to null
+        mins == 0 -> "${hours}h" to null
+        else -> "${hours}h" to String.format(Locale.US, "%02dm", mins)
+    }
+}
+
+/**
  * Color-codes sleep quality scores for high readability on light surfaces.
  */
 fun sleepScoreColorInt(score: Int): Int {
