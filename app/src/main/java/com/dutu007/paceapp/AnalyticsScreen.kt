@@ -57,16 +57,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.dutu007.paceapp.widget.LabStudyWidgetProvider
-import com.dutu007.paceapp.widget.OriginOsKeepAliveHelper
-import com.dutu007.paceapp.widget.SleepTrendWidgetProvider
 import com.dutu007.paceapp.data.AnalyticsOverview
 import com.dutu007.paceapp.data.CustomMetricSummary
 import com.dutu007.paceapp.data.DailyMetricPoint
@@ -133,11 +129,9 @@ fun AnalyticsScreen(
     viewModel: PaceViewModel,
 ) {
     val dashboard = state.analytics
-    val context = LocalContext.current
     var showLabSheet by remember { mutableStateOf(false) }
     var showSleepSheet by remember { mutableStateOf(false) }
     var showSpecDialog by remember { mutableStateOf(false) }
-    var showWidgetDialog by remember { mutableStateOf(false) }
     var sessionToDelete by remember { mutableStateOf<LabSessionItem?>(null) }
     var previewTarget by remember { mutableStateOf<InAppPreviewTarget?>(null) }
     var liveTick by remember { mutableIntStateOf(0) }
@@ -183,20 +177,6 @@ fun AnalyticsScreen(
                             text = "数据规范",
                             style = MaterialTheme.typography.labelMedium,
                             color = PacePalette.Primary,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = PacePalette.PrimarySoft,
-                        border = BorderStroke(1.dp, PacePalette.Primary.copy(alpha = 0.25f)),
-                        onClick = { showWidgetDialog = true },
-                    ) {
-                        Text(
-                            text = "桌面组件",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = PacePalette.Primary,
-                            fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                         )
                     }
@@ -323,28 +303,6 @@ fun AnalyticsScreen(
 
     if (showSpecDialog) {
         AnalyticsSpecDialog(onDismiss = { showSpecDialog = false })
-    }
-
-    if (showWidgetDialog) {
-        WidgetQuickSetupDialog(
-            onDismiss = { showWidgetDialog = false },
-            onPinLab = {
-                val ok = OriginOsKeepAliveHelper.requestPinWidget(context, LabStudyWidgetProvider::class.java)
-                viewModel.notifyHint(
-                    if (ok) "已向桌面发送「实验室学习时长」组件添加请求" else "当前桌面不支持直接推送，请在桌面长按/上滑原子组件库添加 Pace 组件",
-                    isError = !ok,
-                )
-            },
-            onPinSleep = {
-                val ok = OriginOsKeepAliveHelper.requestPinWidget(context, SleepTrendWidgetProvider::class.java)
-                viewModel.notifyHint(
-                    if (ok) "已向桌面发送「睡眠时长趋势」组件添加请求" else "当前桌面不支持直接推送，请在桌面长按/上滑原子组件库添加 Pace 组件",
-                    isError = !ok,
-                )
-            },
-            onOpenBattery = { OriginOsKeepAliveHelper.requestIgnoreBatteryOptimizations(context) },
-            onOpenAutostart = { OriginOsKeepAliveHelper.openOriginOsAutostartSettings(context) },
-        )
     }
 
     sessionToDelete?.let { session ->
@@ -1430,52 +1388,6 @@ private fun SleepManualEntrySheet(
             }
         }
     }
-}
-
-@Composable
-private fun WidgetQuickSetupDialog(
-    onDismiss: () -> Unit,
-    onPinLab: () -> Unit,
-    onPinSleep: () -> Unit,
-    onOpenBattery: () -> Unit,
-    onOpenAutostart: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("OriginOS 桌面原子组件") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    "将学习时长与睡眠曲线添加到 iQOO 桌面（也可用手指在桌面空白处长按 -> 原子组件 -> 搜索 Pace）。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = PacePalette.TextSecondary,
-                )
-                Button(onClick = onPinLab, modifier = Modifier.fillMaxWidth()) {
-                    Text("添加「实验室学习时长」组件")
-                }
-                OutlinedButton(onClick = onPinSleep, modifier = Modifier.fillMaxWidth()) {
-                    Text("添加「睡眠时长趋势」组件")
-                }
-                HorizontalDivider(thickness = 0.5.dp, color = PacePalette.CardBorder)
-                Text(
-                    "后台保活建议：忽略电池优化 + 开启自启动与允许后台高耗电，并在多任务界面下拉锁定 Pace。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = PacePalette.TextSecondary,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onOpenBattery, modifier = Modifier.weight(1f)) {
-                        Text("电池白名单", fontSize = 12.sp)
-                    }
-                    OutlinedButton(onClick = onOpenAutostart, modifier = Modifier.weight(1f)) {
-                        Text("自启动管理", fontSize = 12.sp)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("完成") }
-        },
-    )
 }
 
 @Composable

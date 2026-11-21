@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -992,81 +993,84 @@ private fun MessageItem(
 
     if (isUser) {
         val (cleanText, chips) = remember(message.content) { extractChatAttachmentChips(message.content) }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            Surface(
-                color = PacePalette.Primary,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
-                modifier = Modifier.fillMaxWidth(0.84f),
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val maxBubbleWidth = maxWidth * 0.84f
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                Surface(
+                    color = PacePalette.Primary,
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
+                    modifier = Modifier.widthIn(max = maxBubbleWidth),
                 ) {
-                    if (chips.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            chips.forEach { chip ->
-                                if (chip.isImage && chip.localUri != null) {
-                                    UriThumbnailImage(
-                                        uriString = chip.localUri,
-                                        contentDescription = chip.label,
-                                        modifier = Modifier
-                                            .size(86.dp)
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .clickable { onOpenChip(chip) },
-                                    )
-                                } else {
-                                    val (badge, _) = fileTypeBadge(chip.label)
-                                    Surface(
-                                        color = Color.White.copy(alpha = 0.16f),
-                                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier.clickable { onOpenChip(chip) },
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (chips.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                chips.forEach { chip ->
+                                    if (chip.isImage && chip.localUri != null) {
+                                        UriThumbnailImage(
+                                            uriString = chip.localUri,
+                                            contentDescription = chip.label,
+                                            modifier = Modifier
+                                                .size(86.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable { onOpenChip(chip) },
+                                        )
+                                    } else {
+                                        val (badge, _) = fileTypeBadge(chip.label)
+                                        Surface(
+                                            color = Color.White.copy(alpha = 0.16f),
+                                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier.clickable { onOpenChip(chip) },
                                         ) {
-                                            Surface(
-                                                color = Color.White.copy(alpha = 0.22f),
-                                                shape = RoundedCornerShape(5.dp),
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             ) {
+                                                Surface(
+                                                    color = Color.White.copy(alpha = 0.22f),
+                                                    shape = RoundedCornerShape(5.dp),
+                                                ) {
+                                                    Text(
+                                                        badge,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = Color.White,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                                    )
+                                                }
                                                 Text(
-                                                    badge,
+                                                    chip.label,
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = Color.White,
-                                                    fontWeight = FontWeight.Bold,
-                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.widthIn(max = 160.dp),
                                                 )
                                             }
-                                            Text(
-                                                chip.label,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = Color.White,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.widthIn(max = 160.dp),
-                                            )
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    if (cleanText.isNotBlank()) {
-                        SelectionContainer {
-                            Text(
-                                text = cleanText,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
+                        if (cleanText.isNotBlank()) {
+                            SelectionContainer {
+                                Text(
+                                    text = cleanText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
                         }
                     }
                 }
@@ -1104,6 +1108,9 @@ private fun MessageItem(
     }
 
     // Assistant message: full-width breathable editorial layout (RikkaHub style)
+    val (cleanAssistantText, assistantChips) = remember(message.content) {
+        extractChatAttachmentChips(message.content)
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -1124,15 +1131,71 @@ private fun MessageItem(
         SelectionContainer {
             Column(modifier = Modifier.fillMaxWidth()) {
                 when {
-                    message.content.isNotBlank() -> {
+                    cleanAssistantText.isNotBlank() -> {
                         RichMessageBody(
-                            rawText = message.content,
+                            rawText = cleanAssistantText,
                             textColor = PacePalette.TextPrimary,
                             onPinCard = onPinCard,
                         )
                     }
+                    assistantChips.isNotEmpty() -> Unit
                     message.isStreaming -> {
                         Text("正在思考...", style = MaterialTheme.typography.bodySmall, color = PacePalette.TextSecondary)
+                    }
+                }
+            }
+        }
+
+        if (assistantChips.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                assistantChips.forEach { chip ->
+                    val (badge, badgeColor) = fileTypeBadge(chip.label)
+                    Surface(
+                        color = PacePalette.Card,
+                        border = BorderStroke(1.dp, PacePalette.CardBorder),
+                        shape = RoundedCornerShape(14.dp),
+                        onClick = { onOpenChip(chip) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Surface(
+                                color = badgeColor.copy(alpha = 0.14f),
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text(
+                                    badge,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = badgeColor,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    chip.label,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = PacePalette.TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    "点击预览 / 本机打开",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = PacePalette.TextSecondary,
+                                )
+                            }
+                            Text(
+                                "打开 ›",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = PacePalette.Primary,
+                            )
+                        }
                     }
                 }
             }

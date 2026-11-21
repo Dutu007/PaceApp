@@ -105,4 +105,27 @@ class AttachmentAndDocHelperTest {
         assertEquals(0.10f, ratios[1], 0.0001f)
         assertEquals(1.0f, ratios[2], 0.0001f)
     }
+
+    @Test
+    fun extractsAssistantDocLinksMediaAndPaths() {
+        val raw = """
+            已为你生成运动记录文档：
+            [📄 运动记录.docx](pace-doc://exports/运动记录.docx)
+            另外附带表格 /home/dutu/workspace/personal-assistant/data/exports/周汇总.xlsx。
+            MEDIA:/home/dutu/workspace/personal-assistant/data/exports/运动记录.docx
+        """.trimIndent()
+
+        val (cleanText, chips) = extractChatAttachmentChips(raw)
+
+        assertTrue(cleanText.contains("已为你生成运动记录文档"))
+        assertFalse(cleanText.contains("pace-doc://"))
+        assertFalse(cleanText.contains("MEDIA:"))
+        assertEquals(2, chips.size)
+        assertEquals("运动记录.docx", chips[0].label)
+        assertEquals("exports/运动记录.docx", chips[0].docPath)
+        assertFalse(chips[0].isImage)
+        assertEquals("周汇总.xlsx", chips[1].label)
+        assertEquals("exports/周汇总.xlsx", chips[1].docPath)
+        assertFalse(chips[1].isImage)
+    }
 }

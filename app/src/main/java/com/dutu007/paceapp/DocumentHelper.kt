@@ -80,6 +80,16 @@ data class ChatAttachmentChip(
 )
 
 private val PaceDocLinkRegex = Regex("""\[([^\]]+)\]\((pace-(?:doc|local)://[^)\s]+)\)""")
+private val HermesDataMarkdownLinkRegex = Regex(
+    """\[([^\]]+)\]\((?:file://)?/home/dutu/workspace/personal-assistant/data/([^)\s]+)\)""",
+)
+private val HermesMediaTagRegex = Regex(
+    """MEDIA:(?:file://)?/home/dutu/workspace/personal-assistant/data/([^\s`]+)""",
+)
+private val HermesInlineDataFileRegex = Regex(
+    """`?/home/dutu/workspace/personal-assistant/data/([^\s`"'）)>]+?\.(?:docx|doc|pdf|xlsx|xls|pptx|ppt|csv|png|jpg|jpeg|webp))`?""",
+    RegexOption.IGNORE_CASE,
+)
 private val HermesUploadedDocRegex = Regex(
     """\[附件文档已上传至服务器：/[^\]]*?/data/(uploads/[^（\]]+)（原文件名：([^）]+)）\](?:\n文档内容提取：\n[\s\S]*?(?=\n\n\[附件|\n\n[^\s\[]|$))?"""
 )
@@ -99,47 +109,104 @@ fun encodePaceLocalMarkdown(label: String, uriString: String, isImage: Boolean):
 }
 
 fun extractChatAttachmentChips(rawContent: String): Pair<String, List<ChatAttachmentChip>> {
-    val chips = mutableListOf<ChatAttachmentChip>()
+    val chipsByKey = linkedMapOf<String, ChatAttachmentChip>()
+
+    fun addChip(chip: ChatAttachmentChip) {
+        val key = chip.docPath?.trimStart('/') ?: chip.localUri ?: chip.label
+        if (!chipsByKey.containsKey(key)) {
+            chipsByKey[key] = chip
+        }
+    }
+
     val firstPass = PaceDocLinkRegex.replace(rawContent) { match ->
         val rawLabel = match.groupValues[1].trim()
         val url = match.groupValues[2]
         val isImage = rawLabel.startsWith("🖼") || isImageFileName(rawLabel)
         val cleanLabel = rawLabel.removePrefix("🖼").removePrefix("📄").removePrefix("📎").trim()
         if (url.startsWith("pace-doc://")) {
+            val rawTarget = url.removePrefix("pace-doc://")
             val decoded = runCatching {
-                URLDecoder.decode(url.removePrefix("pace-doc://"), StandardCharsets.UTF_8.name())
-            }.getOrDefault(url.removePrefix("pace-doc://"))
-            chips += ChatAttachmentChip(
-                label = cleanLabel.ifBlank { decoded.substringAfterLast('/') },
-                docPath = decoded,
-                localUri = null,
-                isImage = isImage || isImageFileName(decoded),
+                URLDecoder.decode(rawTarget, StandardCharsets.UTF_8.name())
+            }.getOrDefault(rawTarget).trimStart('/')
+            addChip(
+                ChatAttachmentChip(
+                    label = cleanLabel.ifBlank { decoded.substringAfterLast('/') },
+                    docPath = decoded,
+                    localUri = null,
+                    isImage = isImage || isImageFileName(decoded),
+                ),
             )
         } else if (url.startsWith("pace-local://")) {
+            val rawTarget = url.removePrefix("pace-local://")
             val decoded = runCatching {
-                URLDecoder.decode(url.removePrefix("pace-local://"), StandardCharsets.UTF_8.name())
-            }.getOrDefault(url.removePrefix("pace-local://"))
-            chips += ChatAttachmentChip(
-                label = cleanLabel.ifBlank { "图片" },
-                docPath = null,
-                localUri = decoded,
-                isImage = isImage,
+                URLDecoder.decode(rawTarget, StandardCharsets.UTF_8.name())
+            }.getOrDefault(rawTarget)
+            addChip(
+                ChatAttachmentChip(
+                    label = cleanLabel.ifBlank { "图片" },
+                    docPath = null,
+                    localUri = decoded,
+                    isImage = isImage,
+                ),
             )
         }
         ""
     }
-    val remaining = HermesUploadedDocRegex.replace(firstPass) { match ->
-        val relPath = match.groupValues[1].trim()
+    val secondPass = HermesUploadedDocRegex.replace(firstPass) { match ->
+        val relPath = match.groupValues[1].trim().trimStart('/')
         val name = match.groupValues[2].trim().ifBlank { relPath.substringAfterLast('/') }
-        chips += ChatAttachmentChip(
-            label = name,
-            docPath = relPath,
-            localUri = null,
-            isImage = isImageFileName(name),
+        addChip(
+            ChatAttachmentChip(
+                label = name,
+                docPath = relPath,
+                localUri = null,
+                isImage = isImageFileName(name),
+            ),
         )
         ""
-    }.trim()
-    return remaining to chips
+    }
+    val thirdPass = HermesDataMarkdownLinkRegex.replace(secondPass) { match ->
+        val rawLabel = match.groupValues[1].trim()
+        val relPath = match.groupValues[2].trim().trimStart('/')
+        val isImg = rawLabel.startsWith("🖼") || isImageFileName(rawLabel) || isImageFileName(relPath)
+        val cleanLabel = rawLabel.removePrefix("🖼").removePrefix("📄").removePrefix("📎").trim()
+        addChip(
+            ChatAttachmentChip(
+                label = cleanLabel.ifBlank { relPath.substringAfterLast('/') },
+                docPath = relPath,
+                localUri = null,
+                isImage = isImg,
+            ),
+        )
+        ""
+    }
+    val fourthPass = HermesMediaTagRegex.replace(thirdPass) { match ->
+        val relPath = match.groupValues[1].trim().trimStart('/').trimEnd('.', ',', ';', '。', '，', '；')
+        addChip(
+            ChatAttachmentChip(
+                label = relPath.substringAfterLast('/'),
+                docPath = relPath,
+                localUri = null,
+                isImage = isImageFileName(relPath),
+            ),
+        )
+        ""
+    }
+    HermesInlineDataFileRegex.findAll(fourthPass).forEach { match ->
+        val relPath = match.groupValues[1].trim().trimStart('/').trimEnd('.', ',', ';', '。', '，', '；', ')')
+        if (relPath.isNotBlank()) {
+            addChip(
+                ChatAttachmentChip(
+                    label = relPath.substringAfterLast('/'),
+                    docPath = relPath,
+                    localUri = null,
+                    isImage = isImageFileName(relPath),
+                ),
+            )
+        }
+    }
+    val remaining = fourthPass.replace(Regex("""\n{3,}"""), "\n\n").trim()
+    return remaining to chipsByKey.values.toList()
 }
 
 fun isImageFileName(name: String): Boolean {

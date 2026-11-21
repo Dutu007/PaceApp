@@ -63,6 +63,34 @@
         </receiver>
 
         <receiver
+            android:name=".widget.LabCompactWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_lab_compact_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.dutu007.paceapp.widget.ACTION_REFRESH" />
+                <action android:name="com.dutu007.paceapp.widget.ACTION_LAB_TOGGLE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_lab_compact_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.PaceOverviewWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_overview_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.dutu007.paceapp.widget.ACTION_REFRESH" />
+                <action android:name="com.dutu007.paceapp.widget.ACTION_LAB_TOGGLE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_pace_overview_info" />
+        </receiver>
+
+        <receiver
             android:name=".widget.WidgetBootReceiver"
             android:exported="false">
             <intent-filter>

@@ -324,7 +324,7 @@ func sanitizeRelPath(raw string) (string, error) {
 
 func classifyDoc(rel string) string {
 	switch {
-	case strings.HasPrefix(rel, "uploads/"):
+	case strings.HasPrefix(rel, "uploads/"), strings.HasPrefix(rel, "exports/"):
 		return "upload"
 	case strings.HasPrefix(rel, "diary/"):
 		return "diary"

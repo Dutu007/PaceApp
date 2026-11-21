@@ -24,10 +24,12 @@ object WidgetChartRenderer {
         accentColor: Int,
         emptyLabel: String,
         valueLabelFormatter: (Double) -> String,
+        heightDp: Float = 82f,
+        maxDensityScale: Float = 2.5f,
     ): Bitmap {
-        val scale = context.resources.displayMetrics.density.coerceIn(1.5f, 2.5f)
+        val scale = context.resources.displayMetrics.density.coerceIn(1.5f, maxDensityScale)
         val widthPx = (310f * scale).toInt().coerceAtLeast(320)
-        val heightPx = (82f * scale).toInt().coerceAtLeast(100)
+        val heightPx = (heightDp * scale).toInt().coerceAtLeast(88)
         val bitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 

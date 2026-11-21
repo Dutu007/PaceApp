@@ -16,17 +16,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -145,7 +142,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PaceAppRoot(
     viewModel: PaceViewModel = viewModel(),
@@ -156,7 +153,6 @@ private fun PaceAppRoot(
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
     var showSessionSheet by remember { mutableStateOf(false) }
-    val imeVisible = WindowInsets.isImeVisible
 
     LaunchedEffect(pendingOpenTab, state.authenticated) {
         if (state.authenticated && !pendingOpenTab.isNullOrBlank()) {
@@ -289,12 +285,10 @@ private fun PaceAppRoot(
                     }
                 },
                 bottomBar = {
-                    if (!imeVisible) {
-                        PaceBottomBar(
-                            currentTab = state.currentTab,
-                            onSelectTab = viewModel::selectTab,
-                        )
-                    }
+                    PaceBottomBar(
+                        currentTab = state.currentTab,
+                        onSelectTab = viewModel::selectTab,
+                    )
                 },
             ) { padding ->
                 Column(

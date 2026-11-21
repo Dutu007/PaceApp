@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -465,6 +466,48 @@ func TestOfficeDocsRawAndKnowledgeGraph(t *testing.T) {
 	}
 	if !strings.Contains(xDoc.Content, "| 项目 | 预算 |") || !strings.Contains(xDoc.Content, "| 100 | 200 |") {
 		t.Fatalf("unexpected xlsx extracted table: %s", xDoc.Content)
+	}
+
+	// Verify Hermes-generated exports/*.docx is classified under upload and serves extracted + raw binary
+	exportDocxPath := filepath.Join(srv.docs.assistantDir, "exports", "运动汇报.docx")
+	_ = os.MkdirAll(filepath.Dir(exportDocxPath), 0o755)
+	if err := os.WriteFile(exportDocxPath, docxBuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := srv.docs.list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundExport bool
+	for _, it := range listed {
+		if it.Path == "exports/运动汇报.docx" && it.Category == "upload" {
+			foundExport = true
+			break
+		}
+	}
+	if !foundExport {
+		t.Fatalf("expected exports/运动汇报.docx under category upload, got %+v", listed)
+	}
+	exportContentReq, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/docs/content?path=exports/%E8%BF%90%E5%8A%A8%E6%B1%87%E6%8A%A5.docx", nil)
+	exportContentReq.Header.Set("Authorization", "Bearer "+token)
+	exportContentResp, err := http.DefaultClient.Do(exportContentReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exportContentResp.Body.Close()
+	if exportContentResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on exports content, got %d", exportContentResp.StatusCode)
+	}
+	exportRawReq, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/docs/raw?path=exports/%E8%BF%90%E5%8A%A8%E6%B1%87%E6%8A%A5.docx", nil)
+	exportRawReq.Header.Set("Authorization", "Bearer "+token)
+	exportRawResp, err := http.DefaultClient.Do(exportRawReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exportRawBytes, _ := io.ReadAll(exportRawResp.Body)
+	exportRawResp.Body.Close()
+	if exportRawResp.StatusCode != http.StatusOK || !bytes.Equal(exportRawBytes, docxBuf.Bytes()) {
+		t.Fatalf("expected raw export docx bytes match, status=%d len=%d", exportRawResp.StatusCode, len(exportRawBytes))
 	}
 }
 

@@ -26,21 +26,29 @@ object PaceWidgetUpdater {
     fun hasAnyWidgets(context: Context): Boolean {
         val mgr = AppWidgetManager.getInstance(context)
         val labIds = mgr.getAppWidgetIds(ComponentName(context, LabStudyWidgetProvider::class.java))
+        val compactIds = mgr.getAppWidgetIds(ComponentName(context, LabCompactWidgetProvider::class.java))
         val sleepIds = mgr.getAppWidgetIds(ComponentName(context, SleepTrendWidgetProvider::class.java))
-        return labIds.isNotEmpty() || sleepIds.isNotEmpty()
+        val overviewIds = mgr.getAppWidgetIds(ComponentName(context, PaceOverviewWidgetProvider::class.java))
+        return labIds.isNotEmpty() || compactIds.isNotEmpty() || sleepIds.isNotEmpty() || overviewIds.isNotEmpty()
     }
 
     fun updateAllWidgets(context: Context) {
         val mgr = AppWidgetManager.getInstance(context)
         val labIds = mgr.getAppWidgetIds(ComponentName(context, LabStudyWidgetProvider::class.java))
         if (labIds.isNotEmpty()) {
-            val views = buildLabRemoteViews(context)
-            mgr.updateAppWidget(labIds, views)
+            mgr.updateAppWidget(labIds, buildLabRemoteViews(context))
+        }
+        val compactIds = mgr.getAppWidgetIds(ComponentName(context, LabCompactWidgetProvider::class.java))
+        if (compactIds.isNotEmpty()) {
+            mgr.updateAppWidget(compactIds, buildCompactLabRemoteViews(context))
         }
         val sleepIds = mgr.getAppWidgetIds(ComponentName(context, SleepTrendWidgetProvider::class.java))
         if (sleepIds.isNotEmpty()) {
-            val views = buildSleepRemoteViews(context)
-            mgr.updateAppWidget(sleepIds, views)
+            mgr.updateAppWidget(sleepIds, buildSleepRemoteViews(context))
+        }
+        val overviewIds = mgr.getAppWidgetIds(ComponentName(context, PaceOverviewWidgetProvider::class.java))
+        if (overviewIds.isNotEmpty()) {
+            mgr.updateAppWidget(overviewIds, buildOverviewRemoteViews(context))
         }
     }
 
@@ -262,6 +270,235 @@ object PaceWidgetUpdater {
         )
         views.setTextViewText(
             R.id.widget_sleep_footer_right,
+            if (lastError.isNotBlank()) "同步受限" else WidgetDataStore.lastSyncFormatted(context),
+        )
+        return views
+    }
+
+    private fun buildCompactLabRemoteViews(context: Context): RemoteViews {
+        val views = RemoteViews(context.packageName, R.layout.widget_lab_compact)
+        val hasSession = PaceRepository(context).hasSession()
+        val snapshot = WidgetDataStore.loadSnapshot(context)
+        val lastError = WidgetDataStore.lastError(context)
+
+        views.setOnClickPendingIntent(R.id.widget_compact_root, buildOpenAnalyticsIntent(context, 301))
+        views.setOnClickPendingIntent(
+            R.id.widget_compact_refresh,
+            buildProviderActionIntent(context, LabCompactWidgetProvider::class.java, ACTION_WIDGET_REFRESH, 302),
+        )
+
+        if (!hasSession) {
+            views.setImageViewResource(R.id.widget_compact_dot, R.drawable.widget_dot_teal)
+            views.setTextViewText(R.id.widget_compact_value, "未登录")
+            views.setTextColor(R.id.widget_compact_value, 0xFF5A6B78.toInt())
+            views.setTextViewText(R.id.widget_compact_sub, "点卡片登录 Pace")
+            views.setTextViewText(R.id.widget_compact_action, "打开 Pace")
+            views.setOnClickPendingIntent(R.id.widget_compact_action, buildOpenAnalyticsIntent(context, 303))
+            return views
+        }
+
+        views.setOnClickPendingIntent(
+            R.id.widget_compact_action,
+            buildProviderActionIntent(context, LabCompactWidgetProvider::class.java, ACTION_WIDGET_LAB_TOGGLE, 304),
+        )
+
+        if (snapshot == null) {
+            views.setImageViewResource(R.id.widget_compact_dot, R.drawable.widget_dot_teal)
+            views.setTextViewText(R.id.widget_compact_value, "--")
+            views.setTextColor(R.id.widget_compact_value, 0xFF0E5A6F.toInt())
+            views.setTextViewText(R.id.widget_compact_sub, if (lastError.isNotBlank()) lastError else "点刷新同步")
+            views.setTextViewText(R.id.widget_compact_action, "到达打卡")
+            return views
+        }
+
+        val extraLive = liveExtraMinutes(snapshot)
+        val displayToday = snapshot.todayLabMinutes + extraLive
+        val displayWeek = snapshot.weekLabMinutes + extraLive
+        views.setTextViewText(R.id.widget_compact_value, formatDurationMinutes(displayToday))
+        if (snapshot.labActive) {
+            views.setImageViewResource(R.id.widget_compact_dot, R.drawable.widget_dot_green)
+            views.setTextColor(R.id.widget_compact_value, 0xFF059669.toInt())
+            views.setTextViewText(R.id.widget_compact_sub, "学习中 · 本周 ${formatDurationMinutes(displayWeek)}")
+            views.setTextViewText(R.id.widget_compact_action, "离开签退")
+        } else {
+            views.setImageViewResource(R.id.widget_compact_dot, R.drawable.widget_dot_teal)
+            views.setTextColor(R.id.widget_compact_value, 0xFF0E5A6F.toInt())
+            views.setTextViewText(R.id.widget_compact_sub, "本周 ${formatDurationMinutes(displayWeek)} · ${snapshot.labStreakDays}天")
+            views.setTextViewText(R.id.widget_compact_action, "到达打卡")
+        }
+        return views
+    }
+
+    private fun buildOverviewRemoteViews(context: Context): RemoteViews {
+        val views = RemoteViews(context.packageName, R.layout.widget_pace_overview)
+        val hasSession = PaceRepository(context).hasSession()
+        val snapshot = WidgetDataStore.loadSnapshot(context)
+        val lastError = WidgetDataStore.lastError(context)
+
+        views.setOnClickPendingIntent(R.id.widget_overview_root, buildOpenAnalyticsIntent(context, 401))
+        views.setOnClickPendingIntent(
+            R.id.widget_overview_refresh,
+            buildProviderActionIntent(context, PaceOverviewWidgetProvider::class.java, ACTION_WIDGET_REFRESH, 402),
+        )
+
+        if (!hasSession) {
+            views.setImageViewResource(R.id.widget_overview_lab_dot, R.drawable.widget_dot_teal)
+            views.setTextViewText(R.id.widget_overview_lab_badge, "未登录")
+            views.setInt(R.id.widget_overview_lab_badge, "setBackgroundResource", R.drawable.widget_pill_muted)
+            views.setTextColor(R.id.widget_overview_lab_badge, 0xFF5A6B78.toInt())
+            views.setTextViewText(R.id.widget_overview_lab_sub, "")
+            views.setTextViewText(R.id.widget_overview_action, "登录")
+            views.setOnClickPendingIntent(R.id.widget_overview_action, buildOpenAnalyticsIntent(context, 403))
+            views.setImageViewBitmap(
+                R.id.widget_overview_lab_chart,
+                WidgetChartRenderer.renderSevenDayBarChart(
+                    context = context,
+                    points = emptyList(),
+                    accentColor = 0xFF0E5A6F.toInt(),
+                    emptyLabel = "点击打开 Pace 登录授权",
+                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                    heightDp = 66f,
+                    maxDensityScale = 2.0f,
+                ),
+            )
+            views.setTextViewText(R.id.widget_overview_sleep_badge, "未登录")
+            views.setViewVisibility(R.id.widget_overview_sleep_score, View.GONE)
+            views.setTextViewText(R.id.widget_overview_sleep_sub, "")
+            views.setImageViewBitmap(
+                R.id.widget_overview_sleep_chart,
+                WidgetChartRenderer.renderSevenDayBarChart(
+                    context = context,
+                    points = emptyList(),
+                    accentColor = 0xFF5B5CE2.toInt(),
+                    emptyLabel = "登录后同步 COROS / 睡眠记录",
+                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                    heightDp = 66f,
+                    maxDensityScale = 2.0f,
+                ),
+            )
+            views.setTextViewText(R.id.widget_overview_footer, "点击进入 PaceApp")
+            return views
+        }
+
+        views.setOnClickPendingIntent(
+            R.id.widget_overview_action,
+            buildProviderActionIntent(context, PaceOverviewWidgetProvider::class.java, ACTION_WIDGET_LAB_TOGGLE, 404),
+        )
+
+        if (snapshot == null) {
+            views.setImageViewResource(R.id.widget_overview_lab_dot, R.drawable.widget_dot_teal)
+            views.setTextViewText(R.id.widget_overview_lab_badge, "同步中")
+            views.setInt(R.id.widget_overview_lab_badge, "setBackgroundResource", R.drawable.widget_pill_teal)
+            views.setTextColor(R.id.widget_overview_lab_badge, 0xFF0E5A6F.toInt())
+            views.setTextViewText(R.id.widget_overview_lab_sub, "")
+            views.setTextViewText(R.id.widget_overview_action, "打卡")
+            views.setImageViewBitmap(
+                R.id.widget_overview_lab_chart,
+                WidgetChartRenderer.renderSevenDayBarChart(
+                    context = context,
+                    points = emptyList(),
+                    accentColor = 0xFF0E5A6F.toInt(),
+                    emptyLabel = if (lastError.isNotBlank()) lastError else "正在拉取数据...",
+                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                    heightDp = 66f,
+                    maxDensityScale = 2.0f,
+                ),
+            )
+            views.setTextViewText(R.id.widget_overview_sleep_badge, "同步中")
+            views.setViewVisibility(R.id.widget_overview_sleep_score, View.GONE)
+            views.setTextViewText(R.id.widget_overview_sleep_sub, "")
+            views.setImageViewBitmap(
+                R.id.widget_overview_sleep_chart,
+                WidgetChartRenderer.renderSevenDayBarChart(
+                    context = context,
+                    points = emptyList(),
+                    accentColor = 0xFF5B5CE2.toInt(),
+                    emptyLabel = "等待睡眠数据同步",
+                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                    heightDp = 66f,
+                    maxDensityScale = 2.0f,
+                ),
+            )
+            views.setTextViewText(R.id.widget_overview_footer, "点击右上角刷新")
+            return views
+        }
+
+        val extraLive = liveExtraMinutes(snapshot)
+        val displayToday = snapshot.todayLabMinutes + extraLive
+        val displayWeek = snapshot.weekLabMinutes + extraLive
+
+        if (snapshot.labActive) {
+            views.setImageViewResource(R.id.widget_overview_lab_dot, R.drawable.widget_dot_green)
+            views.setTextViewText(R.id.widget_overview_lab_badge, "学习中 · ${formatDurationMinutes(displayToday)}")
+            views.setInt(R.id.widget_overview_lab_badge, "setBackgroundResource", R.drawable.widget_pill_green)
+            views.setTextColor(R.id.widget_overview_lab_badge, 0xFF059669.toInt())
+            views.setTextViewText(R.id.widget_overview_action, "签退")
+        } else {
+            views.setImageViewResource(R.id.widget_overview_lab_dot, R.drawable.widget_dot_teal)
+            views.setTextViewText(R.id.widget_overview_lab_badge, "今日 ${formatDurationMinutes(displayToday)}")
+            views.setInt(R.id.widget_overview_lab_badge, "setBackgroundResource", R.drawable.widget_pill_teal)
+            views.setTextColor(R.id.widget_overview_lab_badge, 0xFF0E5A6F.toInt())
+            views.setTextViewText(R.id.widget_overview_action, "打卡")
+        }
+        views.setTextViewText(
+            R.id.widget_overview_lab_sub,
+            "本周 ${formatDurationMinutes(displayWeek)} · 连续 ${snapshot.labStreakDays}天",
+        )
+        views.setImageViewBitmap(
+            R.id.widget_overview_lab_chart,
+            WidgetChartRenderer.renderSevenDayBarChart(
+                context = context,
+                points = WidgetDataStore.toDailyPoints(snapshot.labDailySeries),
+                accentColor = 0xFF0E5A6F.toInt(),
+                emptyLabel = "近 7 天暂无实验室打卡",
+                valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                heightDp = 66f,
+                maxDensityScale = 2.0f,
+            ),
+        )
+
+        if (!snapshot.sleepHasData) {
+            views.setTextViewText(R.id.widget_overview_sleep_badge, "待接入")
+            views.setViewVisibility(R.id.widget_overview_sleep_score, View.GONE)
+            views.setTextViewText(R.id.widget_overview_sleep_sub, "支持 COROS / 手动")
+            views.setImageViewBitmap(
+                R.id.widget_overview_sleep_chart,
+                WidgetChartRenderer.renderSevenDayBarChart(
+                    context = context,
+                    points = emptyList(),
+                    accentColor = 0xFF5B5CE2.toInt(),
+                    emptyLabel = "同步高驰或手动记录后展示睡眠曲线",
+                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                    heightDp = 66f,
+                    maxDensityScale = 2.0f,
+                ),
+            )
+        } else {
+            views.setTextViewText(R.id.widget_overview_sleep_badge, "昨夜 ${formatDurationMinutes(snapshot.latestSleepMinutes)}")
+            val score = snapshot.sleepAvgScore
+            if (score != null && score > 0) {
+                views.setViewVisibility(R.id.widget_overview_sleep_score, View.VISIBLE)
+                views.setTextViewText(R.id.widget_overview_sleep_score, "${score}分")
+            } else {
+                views.setViewVisibility(R.id.widget_overview_sleep_score, View.GONE)
+            }
+            views.setTextViewText(R.id.widget_overview_sleep_sub, "均睡 ${formatDurationMinutes(snapshot.avgSleepMinutes)}")
+            views.setImageViewBitmap(
+                R.id.widget_overview_sleep_chart,
+                WidgetChartRenderer.renderSevenDayBarChart(
+                    context = context,
+                    points = WidgetDataStore.toDailyPoints(snapshot.sleepDailySeries),
+                    accentColor = 0xFF5B5CE2.toInt(),
+                    emptyLabel = "近 7 天暂无睡眠曲线",
+                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                    heightDp = 66f,
+                    maxDensityScale = 2.0f,
+                ),
+            )
+        }
+
+        views.setTextViewText(
+            R.id.widget_overview_footer,
             if (lastError.isNotBlank()) "同步受限" else WidgetDataStore.lastSyncFormatted(context),
         )
         return views
