@@ -49,6 +49,7 @@ object SseParser {
                 sessionId = obj.str("session_id").orEmpty(),
                 messageId = obj.str("message_id").orEmpty(),
                 content = obj.str("content").orEmpty(),
+                pendingSteer = obj.str("pending_steer")?.takeIf { it.isNotBlank() },
             )
             "error" -> ChatStreamEvent.Error(obj.str("message") ?: "对话出现错误")
             "done" -> ChatStreamEvent.Done

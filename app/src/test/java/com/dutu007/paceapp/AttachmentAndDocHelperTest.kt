@@ -161,5 +161,20 @@ class AttachmentAndDocHelperTest {
         assertEquals(45 to 100, computeSleepScoreRange(listOf(87, 84, 90, 88, 57, 77)))
         assertEquals(70 to 100, computeSleepScoreRange(listOf(86, 88, 90)))
         assertEquals(50 to 100, computeSleepScoreRange(emptyList()))
+
+        assertEquals(0f, sleepDurationIntensity(120), 0.0001f)
+        assertEquals(0f, sleepDurationIntensity(180), 0.0001f)
+        assertEquals(0.5f, sleepDurationIntensity(390), 0.0001f)
+        assertEquals(1f, sleepDurationIntensity(600), 0.0001f)
+        assertEquals(1f, sleepDurationIntensity(720), 0.0001f)
+
+        val lightBar = sleepDurationBarColors(180)
+        val midBar = sleepDurationBarColors(390)
+        val deepBar = sleepDurationBarColors(600)
+        assertEquals(0xFF181A66.toInt(), lightBar.textArgb)
+        assertEquals(0xFFFFFFFF.toInt(), deepBar.textArgb)
+        assertTrue(((deepBar.fillArgb ushr 24) and 0xFF) > ((lightBar.fillArgb ushr 24) and 0xFF))
+        assertTrue(((lightBar.fillArgb shr 16) and 0xFF) > ((midBar.fillArgb shr 16) and 0xFF))
+        assertTrue(((midBar.fillArgb shr 16) and 0xFF) > ((deepBar.fillArgb shr 16) and 0xFF))
     }
 }

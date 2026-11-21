@@ -412,6 +412,7 @@ func (s *server) routes() http.Handler {
 	mux.Handle("POST /api/v1/sessions/{id}/chat", s.authMiddleware(http.HandlerFunc(s.sessionChat)))
 	mux.Handle("POST /api/v1/sessions/{id}/chat/stream", s.authMiddleware(http.HandlerFunc(s.sessionChatStream)))
 	mux.Handle("POST /api/v1/runs/{id}/approval", s.authMiddleware(http.HandlerFunc(s.runApproval)))
+	mux.Handle("POST /api/v1/runs/{id}/steer", s.authMiddleware(http.HandlerFunc(s.runSteer)))
 	mux.Handle("POST /api/v1/runs/{id}/stop", s.authMiddleware(http.HandlerFunc(s.runStop)))
 	mux.Handle("POST /api/v1/stt/refine", s.authMiddleware(http.HandlerFunc(s.refineStt)))
 	mux.Handle("POST /api/v1/stt/transcribe", s.authMiddleware(http.HandlerFunc(s.transcribeStt)))

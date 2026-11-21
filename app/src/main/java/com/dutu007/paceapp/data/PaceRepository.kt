@@ -219,6 +219,9 @@ private data class AppReleaseDto(
 private data class ApprovalSubmitDto(val choice: String)
 
 @Serializable
+private data class SteerRunRequestDto(val input: String)
+
+@Serializable
 private data class SttRefineRequestDto(
     val text: String,
     val candidates: List<String> = emptyList(),
@@ -594,6 +597,21 @@ class PaceRepository(context: Context) {
             auth()
             jsonBody(ApprovalSubmitDto(choice))
         }.check()
+    }
+
+    suspend fun steerRun(runId: String, input: String): Boolean {
+        val response = client.post("$baseUrl/api/v1/runs/$runId/steer") {
+            auth()
+            jsonBody(SteerRunRequestDto(input))
+        }
+        if (response.status.value in 200..299) {
+            return true
+        }
+        if (response.status.value == 409) {
+            return false
+        }
+        response.check()
+        return false
     }
 
     suspend fun stopRun(runId: String) {

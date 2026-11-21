@@ -17,6 +17,7 @@ import com.dutu007.paceapp.formatBarDurationLines
 import com.dutu007.paceapp.formatCompactDuration
 import com.dutu007.paceapp.parseClockMinutes
 import com.dutu007.paceapp.sleepAxisOffsetMinutes
+import com.dutu007.paceapp.sleepDurationBarColors
 import com.dutu007.paceapp.sleepScoreColorInt
 
 fun computeNormalizedBarRatios(values: List<Double>): List<Float> {
@@ -199,7 +200,6 @@ object WidgetChartRenderer {
         val slotW = colsWidth / recent.size.toFloat()
         val barW = (slotW * 0.72f).coerceIn(22f * scale, 34f * scale)
         val barRadius = (if (compactMode) 6f else 7.5f) * scale
-        val highlightIdx = recent.indexOfLast { it.durationMinutes > 0 }.coerceAtLeast(0)
 
         val scoreY = (if (compactMode) 9.5f else 11f) * scale
         val plotTop = (if (compactMode) 13f else 15f) * scale
@@ -310,20 +310,14 @@ object WidgetChartRenderer {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             textAlign = Paint.Align.CENTER
         }
-        val scorePillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         val barFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        val hiStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF5B5CE2.toInt()
-            style = Paint.Style.STROKE
-            strokeWidth = 1.1f * scale
-        }
         val barStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xC7B8BCFA.toInt()
             style = Paint.Style.STROKE
             strokeWidth = 1f * scale
         }
         val clockPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = (if (compactMode) 7.0f else 7.8f) * scale
+            color = 0xFF475569.toInt()
             textAlign = Paint.Align.CENTER
         }
         val line1Paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -343,6 +337,7 @@ object WidgetChartRenderer {
         }
         val datePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = (if (compactMode) 7.6f else 8.4f) * scale
+            color = 0xFF5A6B78.toInt()
             textAlign = Paint.Align.CENTER
         }
 
@@ -350,34 +345,16 @@ object WidgetChartRenderer {
 
         recent.forEachIndexed { idx, night ->
             val centerX = sidePad + idx * slotW + slotW / 2f
-            val isHi = idx == highlightIdx
             val left = centerX - barW / 2f
             val right = centerX + barW / 2f
 
             // Top band: Score uniformly on top
             val sc = night.score?.takeIf { it > 0 }
-            val scColor = sc?.let(::sleepScoreColorInt) ?: 0xFF9AA7B2.toInt()
-            if (isHi && sc != null) {
-                scorePillPaint.color = (scColor and 0x00FFFFFF) or 0x1F000000
-                canvas.drawRoundRect(
-                    RectF(
-                        centerX - 14f * scale,
-                        scoreY + scorePaint.ascent() - 1.5f * scale,
-                        centerX + 14f * scale,
-                        scoreY + scorePaint.descent() + 1.5f * scale,
-                    ),
-                    8f * scale,
-                    8f * scale,
-                    scorePillPaint,
-                )
-            }
-            scorePaint.color = scColor
+            scorePaint.color = sc?.let(::sleepScoreColorInt) ?: 0xFF9AA7B2.toInt()
             canvas.drawText(sc?.let { "${it}分" } ?: "--", centerX, scoreY, scorePaint)
 
             // Bottom band: MM-DD X-axis label
             val shortDate = if (night.date.length >= 10) night.date.substring(5) else night.date
-            datePaint.color = if (isHi) 0xFF5B5CE2.toInt() else 0xFF5A6B78.toInt()
-            datePaint.typeface = if (isHi) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
             canvas.drawText(shortDate.ifBlank { "--" }, centerX, dateY, datePaint)
 
             if (night.durationMinutes <= 0) {
@@ -386,7 +363,7 @@ object WidgetChartRenderer {
                 return@forEachIndexed
             }
 
-            // Middle band: floating bar with bedtime at top cap, wake at bottom cap, duration inside
+            // Middle band: floating bar colored strictly by sleep duration depth (3h -> 10h)
             val win = windows[idx]
             val (topY, botY) = if (win != null) {
                 val rawTop = barZoneTop + ((win.first - minAxis) / axisSpan).coerceIn(0f, 1f) * barZoneH
@@ -404,21 +381,15 @@ object WidgetChartRenderer {
                 (barZoneBottom - barH) to barZoneBottom
             }
             val barRect = RectF(left, topY, right, botY)
+            val barColors = sleepDurationBarColors(night.durationMinutes)
 
-            if (isHi) {
-                barFillPaint.color = 0xC74344CE.toInt()
-                canvas.drawRoundRect(barRect, barRadius, barRadius, barFillPaint)
-                canvas.drawRoundRect(barRect, barRadius, barRadius, hiStrokePaint)
-            } else {
-                barFillPaint.color = 0x9EE2E4FF.toInt()
-                canvas.drawRoundRect(barRect, barRadius, barRadius, barFillPaint)
-                canvas.drawRoundRect(barRect, barRadius, barRadius, barStrokePaint)
-            }
+            barFillPaint.color = barColors.fillArgb
+            barStrokePaint.color = barColors.strokeArgb
+            canvas.drawRoundRect(barRect, barRadius, barRadius, barFillPaint)
+            canvas.drawRoundRect(barRect, barRadius, barRadius, barStrokePaint)
 
             val bedClock = extractClockHHMM(night.bedtime)
             val wakeClock = extractClockHHMM(night.wakeTime)
-            clockPaint.color = if (isHi) 0xFF5B5CE2.toInt() else 0xFF5A6B78.toInt()
-            clockPaint.typeface = if (isHi) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
             if (bedClock.isNotBlank()) {
                 val bedBaseline = (topY - 2.8f * scale).coerceAtLeast(plotTop - clockPaint.ascent())
                 canvas.drawText(bedClock, centerX, bedBaseline, clockPaint)
@@ -429,7 +400,7 @@ object WidgetChartRenderer {
                 canvas.drawText(wakeClock, centerX, wakeBaseline, clockPaint)
             }
 
-            val insideColor = if (isHi) 0xFFFFFFFF.toInt() else 0xFF3537B0.toInt()
+            val insideColor = barColors.textArgb
             val centerY = (topY + botY) / 2f
             val barH = botY - topY
             val (line1, line2) = formatBarDurationLines(night.durationMinutes)

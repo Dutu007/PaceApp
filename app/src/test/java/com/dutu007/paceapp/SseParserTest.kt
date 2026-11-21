@@ -15,6 +15,13 @@ class SseParserTest {
 
         val done = SseParser.parseFrame("done", "{}")
         assertTrue(done is ChatStreamEvent.Done)
+
+        val completed = SseParser.parseFrame(
+            "assistant.completed",
+            """{"session_id":"s1","message_id":"m1","content":"已完成","pending_steer":"补充汇总表"}""",
+        ) as ChatStreamEvent.AssistantCompleted
+        assertEquals("已完成", completed.content)
+        assertEquals("补充汇总表", completed.pendingSteer)
     }
 
     @Test

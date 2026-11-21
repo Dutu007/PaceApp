@@ -91,17 +91,6 @@ private val AnalyticsTabIcon = ImageVector.Builder(
     }
 }.build()
 
-private val EntriesTabIcon = ImageVector.Builder(
-    name = "EntriesTab", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
-).apply {
-    path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
-        moveTo(5f, 4f); lineTo(19f, 4f); lineTo(19f, 20f); lineTo(5f, 20f); close()
-        moveTo(9f, 9f); lineTo(15f, 9f)
-        moveTo(9f, 13f); lineTo(15f, 13f)
-        moveTo(9f, 17f); lineTo(12f, 17f)
-    }
-}.build()
-
 private val DocsTabIcon = ImageVector.Builder(
     name = "DocsTab", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
 ).apply {
@@ -239,7 +228,6 @@ private fun PaceAppRoot(
                                             Text(
                                                 text = when (state.currentTab) {
                                                     PaceTab.ANALYTICS -> "数据分析"
-                                                    PaceTab.ENTRIES -> "记录与看板"
                                                     PaceTab.DOCS -> "知识库"
                                                     PaceTab.CHAT -> ""
                                                 },
@@ -320,7 +308,6 @@ private fun PaceAppRoot(
                             onDismissSessionSheet = { showSessionSheet = false },
                         )
                         PaceTab.ANALYTICS -> AnalyticsScreen(state = state, viewModel = viewModel)
-                        PaceTab.ENTRIES -> EntriesScreen(state = state, viewModel = viewModel)
                         PaceTab.DOCS -> DocsScreen(state = state, viewModel = viewModel)
                     }
                 }
@@ -421,7 +408,6 @@ private fun PaceBottomBar(
             val tabs = listOf(
                 Triple(PaceTab.CHAT, "对话", ChatTabIcon),
                 Triple(PaceTab.ANALYTICS, "数据", AnalyticsTabIcon),
-                Triple(PaceTab.ENTRIES, "记录", EntriesTabIcon),
                 Triple(PaceTab.DOCS, "知识库", DocsTabIcon),
             )
             tabs.forEach { (tab, label, icon) ->

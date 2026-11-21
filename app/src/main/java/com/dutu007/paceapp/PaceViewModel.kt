@@ -17,9 +17,7 @@ import com.dutu007.paceapp.data.ChatMessage
 import com.dutu007.paceapp.data.ChatStreamEvent
 import com.dutu007.paceapp.data.DocDetail
 import com.dutu007.paceapp.data.DocSummary
-import com.dutu007.paceapp.data.EntryItem
 import com.dutu007.paceapp.data.KnowledgeGraphData
-import com.dutu007.paceapp.data.PaceCardData
 import com.dutu007.paceapp.data.PaceRepository
 import com.dutu007.paceapp.data.PendingAttachment
 import com.dutu007.paceapp.data.SessionItem
@@ -55,7 +53,7 @@ fun appendTranscriptText(existingDraft: String, transcript: String): String {
     }
 }
 
-enum class PaceTab { CHAT, ANALYTICS, ENTRIES, DOCS }
+enum class PaceTab { CHAT, ANALYTICS, DOCS }
 
 data class PaceNotice(
     val id: String = UUID.randomUUID().toString(),
@@ -85,21 +83,11 @@ data class PaceUiState(
     val draftCursorTick: Int = 0,
     val streaming: Boolean = false,
     val activeRunId: String? = null,
+    val queuedFollowUpCount: Int = 0,
     val toolActivities: List<ToolActivity> = emptyList(),
     val pendingApproval: ApprovalRequest? = null,
     val voiceRefining: Boolean = false,
     val pendingAttachments: List<PendingAttachment> = emptyList(),
-
-    // Entries / Quick capture state
-    val entries: List<EntryItem> = emptyList(),
-    val entriesLoading: Boolean = false,
-    val entryFilterKind: String = "all",
-    val entrySearch: String = "",
-    val captureText: String = "",
-    val captureKind: String = "note",
-    val captureTags: String = "",
-    val captureSyncDoc: String = "diary",
-    val captureBusy: Boolean = false,
 
     // Docs & Knowledge Graph state
     val docs: List<DocSummary> = emptyList(),
@@ -131,7 +119,21 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(PaceUiState())
     val uiState: StateFlow<PaceUiState> = _uiState.asStateFlow()
 
+    private data class PendingFollowUp(
+        val finalMessage: String,
+        val imageUrls: List<String>,
+    )
+
+    private data class PreparedOutgoingPayload(
+        val finalMessage: String,
+        val imageUrls: List<String>,
+        val displaySummary: String,
+    )
+
     private var streamJob: Job? = null
+    private val deferredFollowUps = ArrayDeque<PendingFollowUp>()
+    private var userRequestedStop = false
+    private var activeAssistantMsgId: String? = null
 
     val currentVersionName: String get() = BuildConfig.VERSION_NAME
 
@@ -156,7 +158,6 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(currentTab = tab) }
         when (tab) {
             PaceTab.ANALYTICS -> refreshAnalytics()
-            PaceTab.ENTRIES -> refreshEntries()
             PaceTab.DOCS -> {
                 refreshDocs()
                 refreshGraph()
@@ -279,21 +280,6 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             appendTranscriptToDraft(refined)
         }
     }
-    fun setCaptureText(value: String) = _uiState.update { it.copy(captureText = value) }
-    fun setCaptureKind(value: String) = _uiState.update { it.copy(captureKind = value) }
-    fun setCaptureTags(value: String) = _uiState.update { it.copy(captureTags = value) }
-    fun setCaptureSyncDoc(value: String) = _uiState.update { it.copy(captureSyncDoc = value) }
-
-    fun setEntryFilterKind(kind: String) {
-        _uiState.update { it.copy(entryFilterKind = kind) }
-        refreshEntries()
-    }
-
-    fun setEntrySearch(query: String) {
-        _uiState.update { it.copy(entrySearch = query) }
-        refreshEntries()
-    }
-
     fun setDocFilterCategory(cat: String) {
         _uiState.update { it.copy(docFilterCategory = cat) }
         refreshDocs()
@@ -345,6 +331,9 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun signOut() {
+        userRequestedStop = true
+        deferredFollowUps.clear()
+        activeAssistantMsgId = null
         streamJob?.cancel()
         viewModelScope.launch {
             repository.signOut()
@@ -359,7 +348,6 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(hermesOnline = online) }
             loadSessionsInternal(autoSelect = true)
             refreshAnalytics()
-            refreshEntries()
             refreshDocs()
             refreshGraph()
         }
@@ -519,203 +507,380 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         val text = state.draft.trim()
         val attachments = state.pendingAttachments
-        if ((text.isBlank() && attachments.isEmpty()) || state.streaming) return
+        if (text.isBlank() && attachments.isEmpty()) return
+
+        if (state.streaming) {
+            sendMidRunFollowUp(text, attachments)
+            return
+        }
 
         val appContext = getApplication<Application>().applicationContext
+        userRequestedStop = false
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
-            var sessionId = _uiState.value.activeSessionId
-            if (sessionId == null) {
-                try {
-                    val titleSeed = text.ifBlank { attachments.firstOrNull()?.name.orEmpty() }.take(24)
-                    val created = repository.createSession(title = titleSeed)
-                    sessionId = created.id
-                    repository.saveLastSessionId(sessionId)
-                    _uiState.update {
-                        it.copy(
-                            sessions = listOf(created) + it.sessions,
-                            activeSessionId = sessionId,
-                        )
-                    }
-                } catch (e: Exception) {
-                    if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
-                    return@launch
-                }
-            }
-
-            val imageUrls = mutableListOf<String>()
-            val uploadedLines = mutableListOf<String>()
-            val displayChips = mutableListOf<String>()
-            var uploadedDocCount = 0
-            try {
-                for (att in attachments) {
-                    val uri = Uri.parse(att.uriString)
-                    if (att.isImage) {
-                        val dataUrl = withContext(Dispatchers.IO) { encodeImageAsDataUrl(appContext, uri) }
-                            ?: throw IllegalStateException("无法读取图片 ${att.name}")
-                        imageUrls += dataUrl
-                        val cachedThumbUri = withContext(Dispatchers.IO) {
-                            runCatching {
-                                val dir = File(appContext.cacheDir, "sent_images").apply { mkdirs() }
-                                val dst = File(dir, "${System.currentTimeMillis()}_${att.id.take(8)}.jpg")
-                                appContext.contentResolver.openInputStream(uri)?.use { input ->
-                                    dst.outputStream().use { out -> input.copyTo(out) }
-                                }
-                                Uri.fromFile(dst).toString()
-                            }.getOrDefault(att.uriString)
-                        }
-                        displayChips += encodePaceLocalMarkdown(att.name, cachedThumbUri, isImage = true)
-                    } else {
-                        val bytes = withContext(Dispatchers.IO) {
-                            appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        } ?: throw IllegalStateException("无法读取文件 ${att.name}")
-                        if (bytes.size > 20 * 1024 * 1024) {
-                            throw IllegalStateException("文件 ${att.name} 超过 20 MB 上限")
-                        }
-                        val uploaded = repository.uploadFileBytes(att.name, bytes)
-                        uploadedDocCount++
-                        val extracted = uploaded.extractedText.trim().take(6000)
-                        uploadedLines += buildString {
-                            append("[附件文档已上传至服务器：${uploaded.hostPath}（原文件名：${uploaded.name}）]")
-                            if (extracted.isNotBlank()) {
-                                append("\n文档内容提取：\n")
-                                append(extracted)
-                            }
-                        }
-                        displayChips += encodePaceDocMarkdown(uploaded.name, uploaded.path, isImage = false)
-                    }
-                }
+            val sessionId = ensureActiveSessionId(text, attachments) ?: return@launch
+            val prepared = try {
+                prepareOutgoingPayload(appContext, text, attachments)
             } catch (e: Exception) {
-                showNotice(e.toDisplayMessage(), isError = true)
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
                 return@launch
             }
-            if (uploadedDocCount > 0) {
-                refreshDocs()
-                refreshGraph()
-            }
-
-            val finalMessage = buildString {
-                if (uploadedLines.isNotEmpty()) {
-                    append(uploadedLines.joinToString("\n\n"))
-                    if (text.isNotBlank()) append("\n\n")
-                }
-                if (text.isNotBlank()) {
-                    append(text)
-                } else if (imageUrls.isNotEmpty()) {
-                    append("请查看我发送的图片。")
-                } else if (uploadedLines.isNotEmpty()) {
-                    append("请查看并整理我上传的文档文件。")
-                }
-            }
-
-            val displaySummary = buildString {
-                if (displayChips.isNotEmpty()) {
-                    append(displayChips.joinToString(" "))
-                    if (text.isNotBlank()) append("\n")
-                }
-                append(text)
-            }
-
-            val userMsgId = "local_u_${UUID.randomUUID()}"
-            val assistantMsgId = "local_a_${UUID.randomUUID()}"
             _uiState.update {
                 it.copy(
                     draft = "",
                     pendingAttachments = emptyList(),
-                    streaming = true,
-                    activeRunId = null,
-                    toolActivities = emptyList(),
-                    pendingApproval = null,
-                    messages = it.messages + listOf(
-                        ChatMessage(id = userMsgId, role = "user", content = displaySummary),
-                        ChatMessage(id = assistantMsgId, role = "assistant", content = "", isStreaming = true),
-                    ),
+                )
+            }
+            startStreamTurn(
+                sessionId = sessionId,
+                finalMessage = prepared.finalMessage,
+                imageUrls = prepared.imageUrls,
+                userDisplaySummary = prepared.displaySummary,
+            )
+        }
+    }
+
+    private suspend fun ensureActiveSessionId(
+        text: String,
+        attachments: List<PendingAttachment>,
+    ): String? {
+        val current = _uiState.value.activeSessionId
+        if (current != null) return current
+        return try {
+            val titleSeed = text.ifBlank { attachments.firstOrNull()?.name.orEmpty() }.take(24)
+            val created = repository.createSession(title = titleSeed)
+            repository.saveLastSessionId(created.id)
+            _uiState.update {
+                it.copy(
+                    sessions = listOf(created) + it.sessions,
+                    activeSessionId = created.id,
+                )
+            }
+            created.id
+        } catch (e: Exception) {
+            if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            null
+        }
+    }
+
+    private suspend fun prepareOutgoingPayload(
+        appContext: Context,
+        text: String,
+        attachments: List<PendingAttachment>,
+    ): PreparedOutgoingPayload {
+        val imageUrls = mutableListOf<String>()
+        val uploadedLines = mutableListOf<String>()
+        val displayChips = mutableListOf<String>()
+        var uploadedDocCount = 0
+
+        for (att in attachments) {
+            val uri = Uri.parse(att.uriString)
+            if (att.isImage) {
+                val dataUrl = withContext(Dispatchers.IO) { encodeImageAsDataUrl(appContext, uri) }
+                    ?: throw IllegalStateException("无法读取图片 ${att.name}")
+                imageUrls += dataUrl
+                val cachedThumbUri = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val dir = File(appContext.cacheDir, "sent_images").apply { mkdirs() }
+                        val dst = File(dir, "${System.currentTimeMillis()}_${att.id.take(8)}.jpg")
+                        appContext.contentResolver.openInputStream(uri)?.use { input ->
+                            dst.outputStream().use { out -> input.copyTo(out) }
+                        }
+                        Uri.fromFile(dst).toString()
+                    }.getOrDefault(att.uriString)
+                }
+                displayChips += encodePaceLocalMarkdown(att.name, cachedThumbUri, isImage = true)
+            } else {
+                val bytes = withContext(Dispatchers.IO) {
+                    appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } ?: throw IllegalStateException("无法读取文件 ${att.name}")
+                if (bytes.size > 20 * 1024 * 1024) {
+                    throw IllegalStateException("文件 ${att.name} 超过 20 MB 上限")
+                }
+                val uploaded = repository.uploadFileBytes(att.name, bytes)
+                uploadedDocCount++
+                val extracted = uploaded.extractedText.trim().take(6000)
+                uploadedLines += buildString {
+                    append("[附件文档已上传至服务器：${uploaded.hostPath}（原文件名：${uploaded.name}）]")
+                    if (extracted.isNotBlank()) {
+                        append("\n文档内容提取：\n")
+                        append(extracted)
+                    }
+                }
+                displayChips += encodePaceDocMarkdown(uploaded.name, uploaded.path, isImage = false)
+            }
+        }
+
+        if (uploadedDocCount > 0) {
+            refreshDocs()
+            refreshGraph()
+        }
+
+        val finalMessage = buildString {
+            if (uploadedLines.isNotEmpty()) {
+                append(uploadedLines.joinToString("\n\n"))
+                if (text.isNotBlank()) append("\n\n")
+            }
+            if (text.isNotBlank()) {
+                append(text)
+            } else if (imageUrls.isNotEmpty()) {
+                append("请查看我发送的图片。")
+            } else if (uploadedLines.isNotEmpty()) {
+                append("请查看并整理我上传的文档文件。")
+            }
+        }
+
+        val displaySummary = buildString {
+            if (displayChips.isNotEmpty()) {
+                append(displayChips.joinToString(" "))
+                if (text.isNotBlank()) append("\n")
+            }
+            append(text)
+        }
+
+        return PreparedOutgoingPayload(
+            finalMessage = finalMessage,
+            imageUrls = imageUrls,
+            displaySummary = displaySummary,
+        )
+    }
+
+    private fun sendMidRunFollowUp(text: String, attachments: List<PendingAttachment>) {
+        val appContext = getApplication<Application>().applicationContext
+        viewModelScope.launch {
+            val prepared = try {
+                prepareOutgoingPayload(appContext, text, attachments)
+            } catch (e: Exception) {
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+                return@launch
+            }
+
+            val userBubble = ChatMessage(
+                id = "local_u_${UUID.randomUUID()}",
+                role = "user",
+                content = prepared.displaySummary,
+            )
+            _uiState.update { s ->
+                val insertIdx = activeAssistantMsgId?.let { aid ->
+                    s.messages.indexOfFirst { it.id == aid && it.isStreaming }
+                } ?: -1
+                val updatedMsgs = if (insertIdx >= 0) {
+                    s.messages.toMutableList().apply { add(insertIdx, userBubble) }
+                } else {
+                    s.messages + userBubble
+                }
+                s.copy(
+                    draft = "",
+                    pendingAttachments = emptyList(),
+                    messages = updatedMsgs,
                 )
             }
 
-            try {
-                repository.streamChat(sessionId, finalMessage, imageUrls).collect { event ->
-                    when (event) {
-                        is ChatStreamEvent.RunStarted -> _uiState.update { it.copy(activeRunId = event.runId) }
-                        is ChatStreamEvent.AssistantDelta -> {
-                            _uiState.update { s ->
-                                s.copy(
-                                    messages = s.messages.map { m ->
-                                        if (m.id == assistantMsgId) m.copy(content = m.content + event.delta) else m
-                                    },
-                                )
-                            }
+            val runId = _uiState.value.activeRunId
+            if (prepared.imageUrls.isEmpty() && !runId.isNullOrBlank()) {
+                try {
+                    val accepted = repository.steerRun(runId, prepared.finalMessage)
+                    if (accepted) {
+                        val preview = text.ifBlank { "已补充附件指令" }.take(40)
+                        _uiState.update { s ->
+                            s.copy(
+                                toolActivities = (s.toolActivities + ToolActivity("补充指令", "info", preview)).takeLast(6),
+                            )
                         }
-                        is ChatStreamEvent.AssistantCommentary -> {
-                            if (event.text.isNotBlank()) {
-                                _uiState.update { s ->
-                                    s.copy(
-                                        toolActivities = (s.toolActivities + ToolActivity("思考", "info", event.text)).takeLast(6),
-                                    )
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    if (handleAuthError(e)) return@launch
+                }
+            }
+
+            if (!_uiState.value.streaming) {
+                val sessionId = _uiState.value.activeSessionId
+                if (sessionId != null && !userRequestedStop) {
+                    userRequestedStop = false
+                    streamJob = viewModelScope.launch {
+                        startStreamTurn(
+                            sessionId = sessionId,
+                            finalMessage = prepared.finalMessage,
+                            imageUrls = prepared.imageUrls,
+                            userDisplaySummary = null,
+                        )
+                    }
+                    return@launch
+                }
+            }
+
+            deferredFollowUps.addLast(PendingFollowUp(prepared.finalMessage, prepared.imageUrls))
+            _uiState.update { it.copy(queuedFollowUpCount = deferredFollowUps.size) }
+            if (prepared.imageUrls.isNotEmpty()) {
+                showNotice("图片消息已排队，将在当前回复完成后自动发送")
+            }
+        }
+    }
+
+    private suspend fun startStreamTurn(
+        sessionId: String,
+        finalMessage: String,
+        imageUrls: List<String>,
+        userDisplaySummary: String?,
+    ) {
+        val assistantMsgId = "local_a_${UUID.randomUUID()}"
+        activeAssistantMsgId = assistantMsgId
+        val newMessages = buildList {
+            if (userDisplaySummary != null) {
+                add(ChatMessage(id = "local_u_${UUID.randomUUID()}", role = "user", content = userDisplaySummary))
+            }
+            add(ChatMessage(id = assistantMsgId, role = "assistant", content = "", isStreaming = true))
+        }
+        _uiState.update {
+            it.copy(
+                streaming = true,
+                activeRunId = null,
+                toolActivities = emptyList(),
+                pendingApproval = null,
+                messages = it.messages + newMessages,
+            )
+        }
+
+        try {
+            repository.streamChat(sessionId, finalMessage, imageUrls).collect { event ->
+                when (event) {
+                    is ChatStreamEvent.RunStarted -> {
+                        _uiState.update { it.copy(activeRunId = event.runId) }
+                        val rid = event.runId
+                        if (!rid.isNullOrBlank() && !userRequestedStop) {
+                            viewModelScope.launch {
+                                while (deferredFollowUps.isNotEmpty() && deferredFollowUps.first().imageUrls.isEmpty()) {
+                                    val head = deferredFollowUps.removeFirst()
+                                    _uiState.update { it.copy(queuedFollowUpCount = deferredFollowUps.size) }
+                                    val steered = runCatching { repository.steerRun(rid, head.finalMessage) }
+                                        .getOrDefault(false)
+                                    if (steered) {
+                                        _uiState.update { s ->
+                                            s.copy(
+                                                toolActivities = (s.toolActivities + ToolActivity("补充指令", "info", head.finalMessage.take(40))).takeLast(6),
+                                            )
+                                        }
+                                    } else {
+                                        deferredFollowUps.addFirst(head)
+                                        _uiState.update { it.copy(queuedFollowUpCount = deferredFollowUps.size) }
+                                        break
+                                    }
                                 }
                             }
                         }
-                        is ChatStreamEvent.ToolProgress -> {
-                            _uiState.update { s ->
-                                val activity = ToolActivity(event.toolName, event.eventType, event.preview)
-                                val updated = (s.toolActivities.filterNot { it.name == event.toolName && it.status == "tool.started" } + activity).takeLast(6)
-                                s.copy(toolActivities = updated)
-                            }
+                    }
+                    is ChatStreamEvent.AssistantDelta -> {
+                        _uiState.update { s ->
+                            s.copy(
+                                messages = s.messages.map { m ->
+                                    if (m.id == assistantMsgId) m.copy(content = m.content + event.delta) else m
+                                },
+                            )
                         }
-                        is ChatStreamEvent.ApprovalNeeded -> _uiState.update { it.copy(pendingApproval = event.request) }
-                        is ChatStreamEvent.AssistantCompleted -> {
+                    }
+                    is ChatStreamEvent.AssistantCommentary -> {
+                        if (event.text.isNotBlank()) {
                             _uiState.update { s ->
                                 s.copy(
-                                    messages = s.messages.map { m ->
-                                        if (m.id == assistantMsgId) {
-                                            m.copy(content = event.content.ifBlank { m.content }, isStreaming = false)
-                                        } else m
-                                    },
-                                )
-                            }
-                        }
-                        is ChatStreamEvent.Error -> showNotice(event.message, isError = true)
-                        ChatStreamEvent.Done -> {
-                            _uiState.update { s ->
-                                s.copy(
-                                    streaming = false,
-                                    activeRunId = null,
-                                    pendingApproval = null,
-                                    messages = s.messages.map { m ->
-                                        if (m.id == assistantMsgId) m.copy(isStreaming = false) else m
-                                    },
+                                    toolActivities = (s.toolActivities + ToolActivity("思考", "info", event.text)).takeLast(6),
                                 )
                             }
                         }
                     }
+                    is ChatStreamEvent.ToolProgress -> {
+                        _uiState.update { s ->
+                            val activity = ToolActivity(event.toolName, event.eventType, event.preview)
+                            val updated = (s.toolActivities.filterNot { it.name == event.toolName && it.status == "tool.started" } + activity).takeLast(6)
+                            s.copy(toolActivities = updated)
+                        }
+                    }
+                    is ChatStreamEvent.ApprovalNeeded -> _uiState.update { it.copy(pendingApproval = event.request) }
+                    is ChatStreamEvent.AssistantCompleted -> {
+                        val pending = event.pendingSteer?.takeIf { it.isNotBlank() }
+                        if (pending != null && !userRequestedStop) {
+                            deferredFollowUps.addLast(PendingFollowUp(pending, emptyList()))
+                            _uiState.update { it.copy(queuedFollowUpCount = deferredFollowUps.size) }
+                        }
+                        _uiState.update { s ->
+                            s.copy(
+                                messages = s.messages.map { m ->
+                                    if (m.id == assistantMsgId) {
+                                        m.copy(content = event.content.ifBlank { m.content }, isStreaming = false)
+                                    } else m
+                                },
+                            )
+                        }
+                    }
+                    is ChatStreamEvent.Error -> showNotice(event.message, isError = true)
+                    ChatStreamEvent.Done -> {
+                        _uiState.update { s ->
+                            s.copy(
+                                streaming = false,
+                                activeRunId = null,
+                                pendingApproval = null,
+                                messages = s.messages.map { m ->
+                                    if (m.id == assistantMsgId) m.copy(isStreaming = false) else m
+                                },
+                            )
+                        }
+                    }
                 }
-            } catch (e: Exception) {
-                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
-            } finally {
-                _uiState.update { s ->
-                    s.copy(
-                        streaming = false,
-                        activeRunId = null,
-                        pendingApproval = null,
-                        messages = s.messages.map { m ->
-                            if (m.id == assistantMsgId) m.copy(isStreaming = false) else m
-                        },
+            }
+        } catch (e: Exception) {
+            if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+        } finally {
+            if (activeAssistantMsgId == assistantMsgId) {
+                activeAssistantMsgId = null
+            }
+            _uiState.update { s ->
+                s.copy(
+                    streaming = false,
+                    activeRunId = null,
+                    pendingApproval = null,
+                    messages = s.messages.map { m ->
+                        if (m.id == assistantMsgId) m.copy(isStreaming = false) else m
+                    },
+                )
+            }
+            refreshAnalytics()
+            refreshDocs()
+            runCatching {
+                val source = if (_uiState.value.sessionFilterPaceOnly) "api_server" else null
+                val refreshed = repository.listSessions(source = source)
+                _uiState.update { it.copy(sessions = refreshed) }
+            }
+
+            if (!userRequestedStop && deferredFollowUps.isNotEmpty()) {
+                val first = deferredFollowUps.removeFirst()
+                val coalescedMessage = if (first.imageUrls.isEmpty()) {
+                    buildString {
+                        append(first.finalMessage)
+                        while (deferredFollowUps.isNotEmpty() && deferredFollowUps.first().imageUrls.isEmpty()) {
+                            append("\n\n")
+                            append(deferredFollowUps.removeFirst().finalMessage)
+                        }
+                    }
+                } else {
+                    first.finalMessage
+                }
+                _uiState.update { it.copy(queuedFollowUpCount = deferredFollowUps.size) }
+                streamJob = viewModelScope.launch {
+                    startStreamTurn(
+                        sessionId = sessionId,
+                        finalMessage = coalescedMessage,
+                        imageUrls = first.imageUrls,
+                        userDisplaySummary = null,
                     )
-                }
-                // Refresh entries, analytics & docs in case Hermes wrote something during this turn!
-                refreshEntries()
-                refreshAnalytics()
-                refreshDocs()
-                runCatching {
-                    val source = if (_uiState.value.sessionFilterPaceOnly) "api_server" else null
-                    val refreshed = repository.listSessions(source = source)
-                    _uiState.update { it.copy(sessions = refreshed) }
                 }
             }
         }
     }
 
     fun stopActiveRun() {
+        userRequestedStop = true
+        deferredFollowUps.clear()
+        _uiState.update { it.copy(queuedFollowUpCount = 0) }
         val runId = _uiState.value.activeRunId
         if (runId != null) {
             viewModelScope.launch { runCatching { repository.stopRun(runId) } }
@@ -732,132 +897,6 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(pendingApproval = null) }
             } catch (e: Exception) {
                 showNotice(e.toDisplayMessage(), isError = true)
-            }
-        }
-    }
-
-    // -- Entries & Pinned Cards --
-
-    fun refreshEntries() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(entriesLoading = true) }
-            try {
-                val s = _uiState.value
-                val items = repository.listEntries(kind = s.entryFilterKind, query = s.entrySearch)
-                _uiState.update { it.copy(entriesLoading = false, entries = items) }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(entriesLoading = false) }
-                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
-            }
-        }
-    }
-
-    fun submitQuickCapture() {
-        val state = _uiState.value
-        val content = state.captureText.trim()
-        if (content.isBlank() || state.captureBusy) return
-        val tags = state.captureTags
-            .split(",", "，", " ")
-            .map { it.trim().removePrefix("#") }
-            .filter { it.isNotBlank() }
-
-        viewModelScope.launch {
-            _uiState.update { it.copy(captureBusy = true) }
-            try {
-                val created = repository.createEntry(
-                    kind = state.captureKind,
-                    title = "",
-                    content = content,
-                    tags = tags,
-                    pinned = false,
-                    syncDoc = state.captureSyncDoc,
-                )
-                _uiState.update {
-                    it.copy(
-                        captureBusy = false,
-                        captureText = "",
-                        captureTags = "",
-                        entries = listOf(created) + it.entries,
-                    )
-                }
-                showNotice(if (created.docPath != null) "已保存并同步到 ${created.docPath}" else "已保存到记录库")
-                if (created.docPath != null) refreshDocs()
-            } catch (e: Exception) {
-                _uiState.update { it.copy(captureBusy = false) }
-                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
-            }
-        }
-    }
-
-    fun saveTextAsEntry(text: String) {
-        val trimmed = text.trim()
-        if (trimmed.isBlank()) return
-        viewModelScope.launch {
-            try {
-                val created = repository.createEntry(
-                    kind = "note",
-                    title = "来自 Hermes 对话",
-                    content = trimmed,
-                    tags = listOf("hermes"),
-                    pinned = false,
-                    syncDoc = "",
-                )
-                _uiState.update { it.copy(entries = listOf(created) + it.entries) }
-                showNotice("已存进记录库")
-            } catch (e: Exception) {
-                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
-            }
-        }
-    }
-
-    fun pinCardToBoard(card: PaceCardData) {
-        viewModelScope.launch {
-            try {
-                val created = repository.createEntry(
-                    kind = "card",
-                    title = card.title,
-                    content = card.subtitle.ifBlank { card.content },
-                    tags = listOf("看板"),
-                    pinned = true,
-                    cardJson = card.rawJson,
-                )
-                _uiState.update { it.copy(entries = listOf(created) + it.entries) }
-                showNotice("已固定到「记录」看板")
-            } catch (e: Exception) {
-                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
-            }
-        }
-    }
-
-    fun toggleEntryCompleted(entry: EntryItem) {
-        viewModelScope.launch {
-            try {
-                val updated = repository.updateEntry(entry.id, completed = !entry.completed)
-                _uiState.update { s -> s.copy(entries = s.entries.map { if (it.id == entry.id) updated else it }) }
-            } catch (e: Exception) {
-                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
-            }
-        }
-    }
-
-    fun toggleEntryPinned(entry: EntryItem) {
-        viewModelScope.launch {
-            try {
-                val updated = repository.updateEntry(entry.id, pinned = !entry.pinned)
-                _uiState.update { s -> s.copy(entries = s.entries.map { if (it.id == entry.id) updated else it }) }
-            } catch (e: Exception) {
-                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
-            }
-        }
-    }
-
-    fun deleteEntry(id: String) {
-        viewModelScope.launch {
-            try {
-                repository.deleteEntry(id)
-                _uiState.update { s -> s.copy(entries = s.entries.filterNot { it.id == id }) }
-            } catch (e: Exception) {
-                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
             }
         }
     }

@@ -289,7 +289,12 @@ sealed interface ChatStreamEvent {
     data class AssistantCommentary(val text: String) : ChatStreamEvent
     data class ToolProgress(val eventType: String, val toolName: String, val preview: String?) : ChatStreamEvent
     data class ApprovalNeeded(val request: ApprovalRequest) : ChatStreamEvent
-    data class AssistantCompleted(val sessionId: String, val messageId: String, val content: String) : ChatStreamEvent
+    data class AssistantCompleted(
+        val sessionId: String,
+        val messageId: String,
+        val content: String,
+        val pendingSteer: String? = null,
+    ) : ChatStreamEvent
     data class Error(val message: String) : ChatStreamEvent
     data object Done : ChatStreamEvent
 }

@@ -1,6 +1,7 @@
 package com.dutu007.paceapp
 
 import java.util.Locale
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 private val SLEEP_CLOCK_REGEX = Regex("""(?:\b|[Tt\s])(\d{1,2}):(\d{2})(?::\d{2})?""")
@@ -131,4 +132,64 @@ fun sleepScoreColorInt(score: Int): Int {
         score >= 70 -> 0xFFD97706.toInt()
         else -> 0xFFDC2626.toInt()
     }
+}
+
+data class SleepBarColors(
+    val fillArgb: Int,
+    val strokeArgb: Int,
+    val textArgb: Int,
+)
+
+private data class QuadFloat(val r: Float, val g: Float, val b: Float, val a: Float)
+
+/**
+ * Normalizes sleep duration onto `[0f, 1f]` between 3h (`180m`) and 10h (`600m`), clamping extremes.
+ */
+fun sleepDurationIntensity(minutes: Int): Float =
+    ((minutes - 180f) / 420f).coerceIn(0f, 1f)
+
+/**
+ * Computes semi-translucent indigo fill, border, and high-contrast label colors directly from sleep duration
+ * (`3h` lightest -> `10h` deepest), without highlighting any single day as darker by recency.
+ */
+fun sleepDurationBarColors(minutes: Int): SleepBarColors {
+    val t = sleepDurationIntensity(minutes)
+    val c = if (t <= 0.5f) {
+        val k = t / 0.5f
+        QuadFloat(
+            r = 234f + (120f - 234f) * k,
+            g = 236f + (123f - 236f) * k,
+            b = 255f + (230f - 255f) * k,
+            a = 0.60f + (0.71f - 0.60f) * k,
+        )
+    } else {
+        val k = (t - 0.5f) / 0.5f
+        QuadFloat(
+            r = 120f + (37f - 120f) * k,
+            g = 123f + (38f - 123f) * k,
+            b = 230f + (172f - 230f) * k,
+            a = 0.71f + (0.82f - 0.71f) * k,
+        )
+    }
+    val br = (c.r * c.a + 255f * (1f - c.a)) / 255f
+    val bg = (c.g * c.a + 255f * (1f - c.a)) / 255f
+    val bb = (c.b * c.a + 255f * (1f - c.a)) / 255f
+    val lum = 0.2126 * br.toDouble().pow(2.2) +
+        0.7152 * bg.toDouble().pow(2.2) +
+        0.0722 * bb.toDouble().pow(2.2)
+    val textArgb = if (lum < 0.25) 0xFFFFFFFF.toInt() else 0xFF181A66.toInt()
+
+    val aInt = (c.a * 255f).roundToInt().coerceIn(0, 255)
+    val rInt = c.r.roundToInt().coerceIn(0, 255)
+    val gInt = c.g.roundToInt().coerceIn(0, 255)
+    val bInt = c.b.roundToInt().coerceIn(0, 255)
+    val fillArgb = (aInt shl 24) or (rInt shl 16) or (gInt shl 8) or bInt
+
+    val saInt = ((c.a + 0.14f).coerceAtMost(0.92f) * 255f).roundToInt().coerceIn(0, 255)
+    val srInt = (c.r * 0.84f).roundToInt().coerceIn(0, 255)
+    val sgInt = (c.g * 0.84f).roundToInt().coerceIn(0, 255)
+    val sbInt = (c.b * 0.92f).roundToInt().coerceIn(0, 255)
+    val strokeArgb = (saInt shl 24) or (srInt shl 16) or (sgInt shl 8) or sbInt
+
+    return SleepBarColors(fillArgb = fillArgb, strokeArgb = strokeArgb, textArgb = textArgb)
 }

@@ -748,3 +748,58 @@ func addZipFile(t *testing.T, zw *zip.Writer, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestRunSteerProxy(t *testing.T) {
+	var seenPath string
+	var seenAuth string
+	var seenBody string
+
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		seenAuth = r.Header.Get("Authorization")
+		raw, _ := io.ReadAll(r.Body)
+		seenBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"object":"hermes.run.steer","run_id":"run_123","accepted":true}`))
+	})
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+
+	token, _, err := srv.auth.issueToken(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/runs/run_123/steer", strings.NewReader(`{"input":"顺便总结成表格"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if seenPath != "/v1/runs/run_123/steer" {
+		t.Fatalf("expected upstream path /v1/runs/run_123/steer, got %q", seenPath)
+	}
+	if seenAuth != "Bearer hermes-secret-key" {
+		t.Fatalf("expected Bearer auth header, got %q", seenAuth)
+	}
+	if !strings.Contains(seenBody, "顺便总结成表格") {
+		t.Fatalf("expected steer body forwarded, got %q", seenBody)
+	}
+
+	badReq, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/runs/bad$id/steer", strings.NewReader(`{"input":"x"}`))
+	badReq.Header.Set("Authorization", "Bearer "+token)
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on invalid run_id, got %d", badResp.StatusCode)
+	}
+}

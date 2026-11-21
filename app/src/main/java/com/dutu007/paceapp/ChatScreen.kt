@@ -84,7 +84,7 @@ import com.dutu007.paceapp.ui.theme.PacePalette
 import java.io.File
 
 private val QuickPrompts = listOf(
-    "记住：今天完成了一项关键任务，帮我同步存入记录和日记",
+    "帮我记一下：今天完成了一项关键任务，并写入今日日记",
     "把我的荣誉清单整理成结构化卡片展示出来",
     "查看我最近的日记和跑步记录，做个简洁统计卡片",
     "列出我当前所有的笔记文档和待办事项",
@@ -158,11 +158,11 @@ fun ChatScreen(
                                     }
                                     Column {
                                         Text("你好，我是 Hermes", style = MaterialTheme.typography.titleMedium, color = PacePalette.TextPrimary)
-                                        Text("随手记录 · 同步文档 · 按要求卡片展示", style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary)
+                                        Text("知识库管理 · 运动与作息分析 · 智能卡片", style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary)
                                     }
                                 }
                                 Text(
-                                    "你可以直接让我记一句话到数据库或日记，也可以让我读取服务器笔记并整理成清单、统计或表格展示。",
+                                    "你可以直接向我发送语音、文档或图片，让我分析数据、整理笔记并用清单或表格展示结果。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = PacePalette.TextSecondary,
                                 )
@@ -197,8 +197,6 @@ fun ChatScreen(
                         items(reversedMessages, key = { it.id }) { msg ->
                             MessageItem(
                                 message = msg,
-                                onPinCard = viewModel::pinCardToBoard,
-                                onSaveText = viewModel::saveTextAsEntry,
                                 onOpenChip = { chip ->
                                     previewTarget = if (chip.docPath != null) {
                                         InAppPreviewTarget.ServerDoc(
@@ -533,6 +531,8 @@ private fun DoubaoComposer(
         verticalArrangement = Arrangement.spacedBy(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        val hasInput = (state.draft.isNotBlank() || state.pendingAttachments.isNotEmpty()) && !state.voiceRefining
+
         if (voiceListening || state.voiceRefining) {
             val bg = when {
                 voiceCancelling -> MaterialTheme.colorScheme.errorContainer
@@ -590,21 +590,49 @@ private fun DoubaoComposer(
                     }
                 }
             }
-        } else if (state.toolActivities.isNotEmpty() && state.streaming) {
-            val latestTool = state.toolActivities.last()
+        } else if (state.streaming) {
+            val latestTool = state.toolActivities.lastOrNull()
+            val statusLine = buildString {
+                if (latestTool != null) {
+                    append("⚙ ${latestTool.name}：${latestTool.preview ?: latestTool.status}")
+                } else {
+                    append("Hermes 思考中 · 可直接输入并发送补充指令")
+                }
+                if (state.queuedFollowUpCount > 0) {
+                    append(" · 已排队 ${state.queuedFollowUpCount} 条")
+                }
+            }
             Surface(
                 color = PacePalette.PrimarySoft,
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    text = "⚙ ${latestTool.name}：${latestTool.preview ?: latestTool.status}",
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = PacePalette.Primary,
+                Row(
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = statusLine,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PacePalette.Primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (hasInput) {
+                        Text(
+                            text = "停止",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(onClick = viewModel::stopActiveRun)
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
             }
         }
 
@@ -845,7 +873,7 @@ private fun DoubaoComposer(
                 ) {
                     if (state.draft.isEmpty()) {
                         Text(
-                            "发消息...",
+                            text = if (state.streaming) "继续补充指令（不中断思考）..." else "发消息...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = PacePalette.TextSecondary.copy(alpha = 0.7f),
                             maxLines = 1,
@@ -869,32 +897,51 @@ private fun DoubaoComposer(
 
                 Spacer(Modifier.width(6.dp))
 
-                if (state.streaming) {
-                    Surface(
-                        onClick = viewModel::stopActiveRun,
-                        color = PacePalette.Muted,
-                        shape = CircleShape,
-                        modifier = Modifier.size(38.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text("■", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                when {
+                    hasInput -> {
+                        Surface(
+                            onClick = viewModel::sendMessage,
+                            color = PacePalette.Primary,
+                            shape = CircleShape,
+                            modifier = Modifier.size(38.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    "↑",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                            }
                         }
                     }
-                } else {
-                    val canSend = (state.draft.isNotBlank() || state.pendingAttachments.isNotEmpty()) && !state.voiceRefining
-                    Surface(
-                        onClick = { if (canSend) viewModel.sendMessage() },
-                        color = if (canSend) PacePalette.Primary else PacePalette.Muted,
-                        shape = CircleShape,
-                        modifier = Modifier.size(38.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                "↑",
-                                color = if (canSend) Color.White else PacePalette.TextSecondary,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleMedium,
-                            )
+                    state.streaming -> {
+                        Surface(
+                            onClick = viewModel::stopActiveRun,
+                            color = PacePalette.Muted,
+                            shape = CircleShape,
+                            modifier = Modifier.size(38.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("■", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    else -> {
+                        Surface(
+                            onClick = {},
+                            color = PacePalette.Muted,
+                            shape = CircleShape,
+                            modifier = Modifier.size(38.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    "↑",
+                                    color = PacePalette.TextSecondary,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                            }
                         }
                     }
                 }
@@ -983,8 +1030,6 @@ private fun createTempCameraUri(context: Context): Uri? = runCatching {
 @Composable
 private fun MessageItem(
     message: ChatMessage,
-    onPinCard: (com.dutu007.paceapp.data.PaceCardData) -> Unit,
-    onSaveText: (String) -> Unit,
     onOpenChip: (ChatAttachmentChip) -> Unit,
 ) {
     val context = LocalContext.current
@@ -1135,7 +1180,7 @@ private fun MessageItem(
                         RichMessageBody(
                             rawText = cleanAssistantText,
                             textColor = PacePalette.TextPrimary,
-                            onPinCard = onPinCard,
+                            onPinCard = null,
                         )
                     }
                     assistantChips.isNotEmpty() -> Unit
@@ -1207,10 +1252,6 @@ private fun MessageItem(
                     onClick = { copyPlainText(context, message.content) },
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                 ) { Text("复制", style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary) }
-                TextButton(
-                    onClick = { onSaveText(message.content) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                ) { Text("存为记录", style = MaterialTheme.typography.labelSmall, color = PacePalette.Primary) }
             }
         }
     }

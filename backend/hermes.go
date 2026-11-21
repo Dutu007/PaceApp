@@ -24,8 +24,7 @@ const paceSystemPrompt = "你正在通过用户的个人手机应用 PaceApp 与
 	"   - 自定义量化指标：metrics/<id>.json（{id, name, unit, color, goal, records: [{date, value, note?}]}）\n" +
 	"   写入时保持单源整洁，不要重复另写一份 Markdown 清单。\n" +
 	"2. 向用户生成并发送文件（Word `.docx`、Excel `.xlsx`、PPT `.pptx`、PDF 或图片）时，必须保存到 `/home/dutu/workspace/personal-assistant/data/exports/<文件名>`（不要保存在 `/tmp` 或 `data/` 之外的目录，否则客户端无法下载预览），并在回复正文附带 `[📄 <文件名>](pace-doc://exports/<文件名>)`（图片用 `[🖼 <文件名>](pace-doc://exports/<文件名>)`），PaceApp 会渲染为可点击的预览/本机打开文件卡片。\n" +
-	"3. PaceApp 后端（http://127.0.0.1:8081）也提供个人数据库记录接口 /api/v1/entries（请求头携带 X-Hermes-Key）。当用户要求“记住某句话”、“存进数据库”或“加入待办”时，除了文字回复外，也可以按用户要求写入文档或调用该接口保存到数据库。\n" +
-	"4. 当用户要求你在软件中“展示”、“整理成清单/表格/统计/卡片”或查看某类记录时，请尽量在回复末尾附带一个结构化展示块（使用 ```pace-card 代码块），PaceApp 客户端会把它渲染为原生交互卡片并允许用户固定到看板：\n" +
+	"3. 若用户要求在对话中展示清单、表格或统计卡片，请在回复末尾附带一个结构化展示块（使用 ```pace-card 代码块），PaceApp 客户端会把它渲染为原生交互卡片：\n" +
 	"```pace-card\n" +
 	`{
   "type": "checklist | stats | table | note",
@@ -323,6 +322,21 @@ func (s *server) runApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, data, err := s.hermes.doJSON(r.Context(), http.MethodPost, "/v1/runs/"+url.PathEscape(id)+"/approval", rawBody)
+	writeUpstreamJSON(w, status, data, err)
+}
+
+func (s *server) runSteer(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !validID(id) {
+		errorJSON(w, http.StatusBadRequest, "invalid_run_id")
+		return
+	}
+	rawBody, err := readLimitedBody(r, 1<<20)
+	if err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid_body")
+		return
+	}
+	status, data, err := s.hermes.doJSON(r.Context(), http.MethodPost, "/v1/runs/"+url.PathEscape(id)+"/steer", rawBody)
 	writeUpstreamJSON(w, status, data, err)
 }
 
