@@ -63,6 +63,19 @@
         </receiver>
 
         <receiver
+            android:name=".widget.SleepCompactWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_sleep_compact_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.dutu007.paceapp.widget.ACTION_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_sleep_compact_info" />
+        </receiver>
+
+        <receiver
             android:name=".widget.LabCompactWidgetProvider"
             android:exported="true"
             android:label="@string/widget_lab_compact_label">

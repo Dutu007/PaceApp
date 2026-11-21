@@ -26,7 +26,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="6dp"
             android:maxLines="1"
-            android:text="睡眠趋势"
+            android:text="睡眠"
             android:textColor="#FF131C24"
             android:textSize="13sp"
             android:textStyle="bold" />
@@ -58,6 +58,20 @@
             android:textColor="#FFD97706"
             android:textSize="11sp"
             android:textStyle="bold"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/widget_sleep_window"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="5dp"
+            android:background="@drawable/widget_pill_muted"
+            android:maxLines="1"
+            android:paddingHorizontal="7dp"
+            android:paddingVertical="2dp"
+            android:text=""
+            android:textColor="#FF5A6B78"
+            android:textSize="10sp"
             android:visibility="gone" />
 
         <LinearLayout

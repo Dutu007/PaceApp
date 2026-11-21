@@ -111,7 +111,7 @@
         android:layout_height="0dp"
         android:layout_marginTop="4dp"
         android:layout_marginBottom="6dp"
-        android:layout_weight="1"
+        android:layout_weight="0.72"
         android:contentDescription="实验室近7天学习时长图表"
         android:scaleType="fitCenter" />
 
@@ -139,7 +139,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="5dp"
             android:maxLines="1"
-            android:text="睡眠趋势"
+            android:text="睡眠"
             android:textColor="#FF131C24"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -196,8 +196,8 @@
         android:layout_height="0dp"
         android:layout_marginTop="4dp"
         android:layout_marginBottom="4dp"
-        android:layout_weight="1"
-        android:contentDescription="近7天睡眠时长图表"
+        android:layout_weight="1.28"
+        android:contentDescription="近7晚睡眠作息图表"
         android:scaleType="fitCenter" />
 
     <TextView

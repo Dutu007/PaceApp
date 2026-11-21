@@ -60,6 +60,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,14 +71,20 @@ import com.dutu007.paceapp.data.LabAnalytics
 import com.dutu007.paceapp.data.LabSessionItem
 import com.dutu007.paceapp.data.RunningAnalytics
 import com.dutu007.paceapp.data.SleepAnalytics
+import com.dutu007.paceapp.data.SleepDailyPoint
+import com.dutu007.paceapp.data.SleepRecordItem
 import com.dutu007.paceapp.ui.theme.PacePalette
 import kotlinx.coroutines.delay
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
 private val SleepAccent = Color(0xFF5B5CE2)
 private val SleepAccentSoft = Color(0xFFECECFF)
@@ -745,38 +752,146 @@ private fun SleepAnalyticsCard(
                     }
                 }
             } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    MetricMiniChip("均值", formatDurationMinutes(sleep.avgDurationMinutes), SleepAccentSoft, SleepAccent)
-                    MetricMiniChip("最近一晚", formatDurationMinutes(sleep.latestDurationMinutes), PacePalette.Muted, PacePalette.TextPrimary)
-                    sleep.avgScore?.let {
-                        MetricMiniChip("平均评分", "$it 分", PacePalette.AccentAmberSoft, PacePalette.AccentAmber)
+                val calendarNights = remember(sleep.dailySeries, sleep.recentRecords) {
+                    buildCalendarSleepNights(sleep.dailySeries, sleep.recentRecords)
+                }
+                val recentNights = remember(sleep.recentRecords) {
+                    buildRecentSleepNights(sleep.recentRecords, limit = 7)
+                }
+                val calendarActiveCount = remember(calendarNights) {
+                    calendarNights.count { it.durationMinutes > 0 }
+                }
+                var useRecentMode by remember(sleep.dailySeries.size, sleep.recentRecords.size) {
+                    mutableStateOf(calendarActiveCount < 3 && recentNights.size > 1)
+                }
+                val displayedNights = if (useRecentMode && recentNights.isNotEmpty()) {
+                    recentNights
+                } else {
+                    calendarNights
+                }
+                val displayedActive = remember(displayedNights) {
+                    displayedNights.filter { it.durationMinutes > 0 }
+                }
+                val kpiAvgDuration = remember(useRecentMode, displayedActive, sleep.avgDurationMinutes) {
+                    if (useRecentMode && displayedActive.isNotEmpty()) {
+                        displayedActive.map { it.durationMinutes }.average().roundToInt()
+                    } else {
+                        sleep.avgDurationMinutes
                     }
                 }
+                val kpiAvgScore = remember(useRecentMode, displayedActive, sleep.avgScore) {
+                    if (useRecentMode) {
+                        val scores = displayedActive.mapNotNull { it.score?.takeIf { s -> s > 0 } }
+                        if (scores.isNotEmpty()) scores.average().roundToInt() else sleep.avgScore
+                    } else {
+                        sleep.avgScore
+                    }
+                }
+                val kpiAvgBedtime = remember(displayedActive, sleep.recentRecords) {
+                    val beds = displayedActive.mapNotNull { it.bedtimeHHMM.ifBlank { null } }
+                        .ifEmpty { sleep.recentRecords.mapNotNull { extractClockHHMM(it.bedtime).ifBlank { null } } }
+                    averageBedtimeClock(beds)
+                }
+                val kpiAvgWake = remember(displayedActive, sleep.recentRecords) {
+                    val wakes = displayedActive.mapNotNull { it.wakeHHMM.ifBlank { null } }
+                        .ifEmpty { sleep.recentRecords.mapNotNull { extractClockHHMM(it.wakeTime).ifBlank { null } } }
+                    averageWakeClock(wakes)
+                }
 
-                val chartPoints = remember(sleep.dailySeries) {
-                    sleep.dailySeries.map {
-                        DailyMetricPoint(
-                            date = it.date,
-                            label = it.label,
-                            weekday = it.weekday,
-                            value = it.durationMinutes.toDouble(),
-                            count = if (it.durationMinutes > 0) 1 else 0,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SleepOverviewKpiTile(
+                            label = if (useRecentMode) "近 ${displayedActive.size} 晚均睡" else "区间均睡",
+                            value = formatDurationMinutes(kpiAvgDuration),
+                            bg = SleepAccentSoft,
+                            fg = SleepAccent,
+                            modifier = Modifier.weight(1f),
+                        )
+                        val scoreColor = kpiAvgScore?.let { Color(sleepScoreColorInt(it)) } ?: PacePalette.AccentAmber
+                        SleepOverviewKpiTile(
+                            label = "平均睡眠分数",
+                            value = kpiAvgScore?.let { "$it 分" } ?: "--",
+                            bg = scoreColor.copy(alpha = 0.12f),
+                            fg = scoreColor,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SleepOverviewKpiTile(
+                            label = "平均入睡",
+                            value = kpiAvgBedtime,
+                            bg = PacePalette.Muted,
+                            fg = PacePalette.TextPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        SleepOverviewKpiTile(
+                            label = "平均醒来",
+                            value = kpiAvgWake,
+                            bg = PacePalette.Muted,
+                            fg = PacePalette.TextPrimary,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
-                DailyBarChart(
-                    points = chartPoints,
-                    barColor = SleepAccent,
-                    valueFormatter = { v -> formatDurationMinutes(v.toInt()) },
+
+                if (recentNights.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (useRecentMode) "按最近 7 次有记录夜晚排列" else "按所选日历区间排列",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PacePalette.TextSecondary,
+                        )
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(PacePalette.Muted)
+                                .padding(2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            listOf(true to "近 7 晚", false to "按日历").forEach { (targetMode, label) ->
+                                val selected = useRecentMode == targetMode
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (selected) PacePalette.Card else Color.Transparent,
+                                    modifier = Modifier.clickable { useRecentMode = targetMode },
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (selected) SleepAccent else PacePalette.TextSecondary,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                SleepScheduleChart(
+                    nights = displayedNights,
                     emptyHint = "区间内暂无睡眠记录",
                 )
 
                 HorizontalDivider(thickness = 0.5.dp, color = PacePalette.CardBorder)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    sleep.recentRecords.take(5).forEach { rec ->
+                    val orderedRecent = remember(sleep.recentRecords) {
+                        sleep.recentRecords.sortedByDescending { it.date }.take(10)
+                    }
+                    orderedRecent.forEach { rec ->
+                        val bedClock = extractClockHHMM(rec.bedtime)
+                        val wakeClock = extractClockHHMM(rec.wakeTime)
+                        val weekdayLabel = chineseWeekday(rec.date)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -786,21 +901,32 @@ private fun SleepAnalyticsCard(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    text = buildString {
-                                        append(rec.date)
-                                        if (rec.bedtime.isNotBlank() || rec.wakeTime.isNotBlank()) {
-                                            append(" · ${rec.bedtime.ifBlank { "--:--" }} - ${rec.wakeTime.ifBlank { "--:--" }}")
-                                        }
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = PacePalette.TextPrimary,
-                                )
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text(
+                                        text = if (weekdayLabel.isNotBlank()) "${rec.date} ($weekdayLabel)" else rec.date,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = PacePalette.TextPrimary,
+                                    )
+                                    if (bedClock.isNotBlank() || wakeClock.isNotBlank()) {
+                                        Text(
+                                            text = "${bedClock.ifBlank { "--:--" }} → ${wakeClock.ifBlank { "--:--" }}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Medium,
+                                            color = SleepAccent,
+                                        )
+                                    }
+                                }
                                 val detailParts = buildList {
                                     rec.deepMinutes?.let { add("深睡 ${formatDurationMinutes(it)}") }
+                                    rec.lightMinutes?.let { add("浅睡 ${formatDurationMinutes(it)}") }
                                     rec.remMinutes?.let { add("REM ${formatDurationMinutes(it)}") }
+                                    rec.awakeMinutes?.takeIf { it > 0 }?.let { add("清醒 ${formatDurationMinutes(it)}") }
                                     if (rec.note.isNotBlank()) add(rec.note)
                                 }
                                 if (detailParts.isNotEmpty()) {
@@ -813,13 +939,19 @@ private fun SleepAnalyticsCard(
                                     )
                                 }
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                rec.score?.let { sc ->
-                                    Surface(shape = RoundedCornerShape(999.dp), color = PacePalette.AccentAmberSoft) {
+                            Row(
+                                modifier = Modifier.padding(start = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                rec.score?.takeIf { it > 0 }?.let { sc ->
+                                    val scColor = Color(sleepScoreColorInt(sc))
+                                    Surface(shape = RoundedCornerShape(999.dp), color = scColor.copy(alpha = 0.14f)) {
                                         Text(
                                             "${sc}分",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = PacePalette.AccentAmber,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = scColor,
                                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                         )
                                     }
@@ -836,6 +968,586 @@ private fun SleepAnalyticsCard(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+private data class SleepChartNight(
+    val date: String,
+    val shortDate: String,
+    val weekday: String,
+    val durationMinutes: Int,
+    val bedtimeHHMM: String,
+    val wakeHHMM: String,
+    val score: Int?,
+    val deepMinutes: Int?,
+    val lightMinutes: Int?,
+    val remMinutes: Int?,
+    val awakeMinutes: Int?,
+    val note: String,
+)
+
+private fun chineseWeekday(dateStr: String): String {
+    return runCatching {
+        when (LocalDate.parse(dateStr.trim()).dayOfWeek) {
+            DayOfWeek.MONDAY -> "周一"
+            DayOfWeek.TUESDAY -> "周二"
+            DayOfWeek.WEDNESDAY -> "周三"
+            DayOfWeek.THURSDAY -> "周四"
+            DayOfWeek.FRIDAY -> "周五"
+            DayOfWeek.SATURDAY -> "周六"
+            DayOfWeek.SUNDAY -> "周日"
+            else -> ""
+        }
+    }.getOrDefault("")
+}
+
+private fun shortDateLabel(dateStr: String): String {
+    return if (dateStr.length >= 10) dateStr.substring(5) else dateStr
+}
+
+private fun buildRecentSleepNights(records: List<SleepRecordItem>, limit: Int = 7): List<SleepChartNight> {
+    return records
+        .sortedByDescending { it.date }
+        .take(limit)
+        .sortedBy { it.date }
+        .map { rec ->
+            SleepChartNight(
+                date = rec.date,
+                shortDate = shortDateLabel(rec.date),
+                weekday = chineseWeekday(rec.date).ifBlank { shortDateLabel(rec.date) },
+                durationMinutes = rec.durationMinutes,
+                bedtimeHHMM = extractClockHHMM(rec.bedtime),
+                wakeHHMM = extractClockHHMM(rec.wakeTime),
+                score = rec.score,
+                deepMinutes = rec.deepMinutes,
+                lightMinutes = rec.lightMinutes,
+                remMinutes = rec.remMinutes,
+                awakeMinutes = rec.awakeMinutes,
+                note = rec.note,
+            )
+        }
+}
+
+private fun buildCalendarSleepNights(
+    series: List<SleepDailyPoint>,
+    records: List<SleepRecordItem>,
+): List<SleepChartNight> {
+    val byDate = records.associateBy { it.date }
+    return series.map { pt ->
+        val rec = byDate[pt.date]
+        SleepChartNight(
+            date = pt.date,
+            shortDate = pt.label.ifBlank { shortDateLabel(pt.date) },
+            weekday = pt.weekday.ifBlank { chineseWeekday(pt.date) },
+            durationMinutes = pt.durationMinutes,
+            bedtimeHHMM = extractClockHHMM(pt.bedtime.ifBlank { rec?.bedtime.orEmpty() }),
+            wakeHHMM = extractClockHHMM(pt.wakeTime.ifBlank { rec?.wakeTime.orEmpty() }),
+            score = pt.score ?: rec?.score,
+            deepMinutes = pt.deepMinutes ?: rec?.deepMinutes,
+            lightMinutes = pt.lightMinutes ?: rec?.lightMinutes,
+            remMinutes = pt.remMinutes ?: rec?.remMinutes,
+            awakeMinutes = rec?.awakeMinutes,
+            note = rec?.note.orEmpty(),
+        )
+    }
+}
+
+@Composable
+private fun SleepOverviewKpiTile(
+    label: String,
+    value: String,
+    bg: Color,
+    fg: Color,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = bg,
+        modifier = modifier,
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(label, fontSize = 10.sp, color = fg.copy(alpha = 0.78f), maxLines = 1)
+            Text(
+                text = value,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = fg,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SleepScheduleChart(
+    nights: List<SleepChartNight>,
+    emptyHint: String,
+) {
+    val hasAny = nights.any { it.durationMinutes > 0 }
+    if (nights.isEmpty() || !hasAny) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(104.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(PacePalette.Background),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(emptyHint, style = MaterialTheme.typography.bodySmall, color = PacePalette.TextSecondary)
+        }
+        return
+    }
+
+    val defaultIndex = remember(nights) {
+        nights.indexOfLast { it.durationMinutes > 0 }.coerceAtLeast(0)
+    }
+    var selectedIndex by remember(nights) { mutableIntStateOf(defaultIndex) }
+    val safeIndex = selectedIndex.coerceIn(0, nights.lastIndex)
+    val selected = nights[safeIndex]
+
+    val validWindows = remember(nights) {
+        nights.map { night ->
+            val bedMin = parseClockMinutes(night.bedtimeHHMM)?.let(::sleepAxisOffsetMinutes)
+            val wakeRawMin = parseClockMinutes(night.wakeHHMM)?.let(::sleepAxisOffsetMinutes)
+            if (bedMin != null && wakeRawMin != null) {
+                val wakeMin = if (wakeRawMin <= bedMin) wakeRawMin + 24 * 60 else wakeRawMin
+                bedMin to wakeMin
+            } else {
+                null
+            }
+        }
+    }
+    val hasAnyWindow = validWindows.any { it != null }
+    val minAxisMinutes = remember(validWindows) {
+        val rawMin = validWindows.filterNotNull().minOfOrNull { it.first } ?: (22 * 60)
+        val flooredHour = floor(rawMin / 60.0).toInt() * 60
+        (flooredHour - 60).coerceAtLeast(18 * 60)
+    }
+    val maxAxisMinutes = remember(validWindows, minAxisMinutes) {
+        val rawMax = validWindows.filterNotNull().maxOfOrNull { it.second } ?: (32 * 60)
+        val ceiledHour = ceil(rawMax / 60.0).toInt() * 60
+        maxOf(minAxisMinutes + 4 * 60, ceiledHour + 60)
+    }
+    val axisTicks = remember(minAxisMinutes, maxAxisMinutes) {
+        listOf(
+            minAxisMinutes,
+            minAxisMinutes + (maxAxisMinutes - minAxisMinutes) / 3,
+            minAxisMinutes + ((maxAxisMinutes - minAxisMinutes) * 2) / 3,
+            maxAxisMinutes,
+        )
+    }
+    val maxDuration = remember(nights) {
+        nights.maxOfOrNull { it.durationMinutes }?.coerceAtLeast(60) ?: 480
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Selected-night detailed callout card
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = PacePalette.Background,
+            border = BorderStroke(1.dp, SleepAccent.copy(alpha = 0.22f)),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "${selected.date} ${selected.weekday}",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PacePalette.TextPrimary,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        selected.score?.takeIf { it > 0 }?.let { sc ->
+                            val scColor = Color(sleepScoreColorInt(sc))
+                            Surface(shape = RoundedCornerShape(999.dp), color = scColor.copy(alpha = 0.14f)) {
+                                Text(
+                                    text = "评分 ${sc}分",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = scColor,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                        Surface(shape = RoundedCornerShape(999.dp), color = SleepAccentSoft) {
+                            Text(
+                                text = if (selected.durationMinutes > 0) formatDurationMinutes(selected.durationMinutes) else "无记录",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SleepAccent,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                }
+
+                if (selected.durationMinutes > 0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "入睡 ${selected.bedtimeHHMM.ifBlank { "--:--" }}",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = SleepAccent,
+                        )
+                        Text(
+                            text = "→",
+                            fontSize = 12.sp,
+                            color = PacePalette.TextSecondary,
+                        )
+                        Text(
+                            text = "醒来 ${selected.wakeHHMM.ifBlank { "--:--" }}",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = SleepAccent,
+                        )
+                    }
+
+                    val deep = selected.deepMinutes ?: 0
+                    val light = selected.lightMinutes ?: 0
+                    val rem = selected.remMinutes ?: 0
+                    val awake = selected.awakeMinutes ?: 0
+                    val stageSum = deep + light + rem + awake
+                    if (stageSum > 0) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(CircleShape)
+                                .background(PacePalette.Muted),
+                            horizontalArrangement = Arrangement.spacedBy(1.dp),
+                        ) {
+                            if (deep > 0) Box(Modifier.weight(deep.toFloat()).fillMaxSize().background(Color(0xFF4338CA)))
+                            if (light > 0) Box(Modifier.weight(light.toFloat()).fillMaxSize().background(Color(0xFF818CF8)))
+                            if (rem > 0) Box(Modifier.weight(rem.toFloat()).fillMaxSize().background(Color(0xFF06B6D4)))
+                            if (awake > 0) Box(Modifier.weight(awake.toFloat()).fillMaxSize().background(Color(0xFFF59E0B)))
+                        }
+                        val parts = buildList {
+                            if (deep > 0) add("深睡 ${formatDurationMinutes(deep)}")
+                            if (light > 0) add("浅睡 ${formatDurationMinutes(light)}")
+                            if (rem > 0) add("REM ${formatDurationMinutes(rem)}")
+                            if (awake > 0) add("清醒 ${formatDurationMinutes(awake)}")
+                        }
+                        Text(
+                            text = parts.joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PacePalette.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "当日暂无睡眠数据",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PacePalette.TextSecondary,
+                    )
+                }
+            }
+        }
+
+        val isSevenOrFewer = nights.size <= 7
+        val railWidth = 36.dp
+
+        if (isSevenOrFewer) {
+            // Structured per-column headers: Duration + Score
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "时长",
+                    fontSize = 9.sp,
+                    color = PacePalette.TextSecondary,
+                    modifier = Modifier.width(railWidth),
+                )
+                nights.forEachIndexed { idx, night ->
+                    Text(
+                        text = formatCompactDuration(night.durationMinutes),
+                        fontSize = 9.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.Medium,
+                        color = when {
+                            night.durationMinutes <= 0 -> PacePalette.TextSecondary.copy(alpha = 0.55f)
+                            idx == safeIndex -> SleepAccent
+                            else -> PacePalette.TextPrimary
+                        },
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "分数",
+                    fontSize = 9.sp,
+                    color = PacePalette.TextSecondary,
+                    modifier = Modifier.width(railWidth),
+                )
+                nights.forEachIndexed { idx, night ->
+                    val sc = night.score?.takeIf { it > 0 }
+                    Text(
+                        text = sc?.let { "${it}分" } ?: "--",
+                        fontSize = 9.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.SemiBold,
+                        color = sc?.let { Color(sleepScoreColorInt(it)) } ?: PacePalette.TextSecondary.copy(alpha = 0.55f),
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
+        // Bedtime-to-wake floating capsule plot with Y-axis time labels on the left
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(126.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(railWidth)
+                    .height(126.dp)
+                    .padding(vertical = 2.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                if (hasAnyWindow) {
+                    axisTicks.forEach { tick ->
+                        Text(
+                            text = formatAxisOffsetClock(tick),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = PacePalette.TextSecondary,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                } else {
+                    Text(formatCompactDuration(maxDuration), fontSize = 9.sp, color = PacePalette.TextSecondary)
+                    Text("0m", fontSize = 9.sp, color = PacePalette.TextSecondary)
+                }
+            }
+
+            val gridColor = PacePalette.CardBorder
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .pointerInput(nights) {
+                        detectTapGestures { offset ->
+                            val slot = size.width.toFloat() / nights.size.coerceAtLeast(1)
+                            val idx = (offset.x / slot).toInt().coerceIn(0, nights.lastIndex)
+                            selectedIndex = idx
+                        }
+                    },
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    val count = nights.size.coerceAtLeast(1)
+                    val slotW = w / count
+                    val capsuleW = minOf(18.dp.toPx(), maxOf(5.dp.toPx(), slotW * 0.44f))
+                    val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
+
+                    listOf(0.06f, 0.35f, 0.65f, 0.94f).forEach { frac ->
+                        val y = h * frac
+                        drawLine(
+                            color = gridColor.copy(alpha = 0.8f),
+                            start = Offset(0f, y),
+                            end = Offset(w, y),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = dash,
+                        )
+                    }
+
+                    val axisSpan = (maxAxisMinutes - minAxisMinutes).coerceAtLeast(1).toFloat()
+                    val padY = h * 0.06f
+                    val usableH = h - 2f * padY
+
+                    nights.forEachIndexed { idx, night ->
+                        val centerX = idx * slotW + slotW / 2f
+                        val left = centerX - capsuleW / 2f
+                        val isSelected = idx == safeIndex
+                        val win = validWindows[idx]
+
+                        if (night.durationMinutes > 0 && win != null) {
+                            val topY = padY + ((win.first - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * usableH
+                            val rawBotY = padY + ((win.second - minAxisMinutes) / axisSpan).coerceIn(0f, 1f) * usableH
+                            val botY = maxOf(topY + 10.dp.toPx(), rawBotY)
+                            val capH = (botY - topY).coerceAtLeast(10.dp.toPx())
+                            if (isSelected) {
+                                drawRoundRect(
+                                    color = SleepAccentSoft.copy(alpha = 0.85f),
+                                    topLeft = Offset(centerX - capsuleW * 0.72f, topY - 3.dp.toPx()),
+                                    size = Size(capsuleW * 1.44f, capH + 6.dp.toPx()),
+                                    cornerRadius = CornerRadius(999f, 999f),
+                                )
+                            }
+                            val fill = if (isSelected) SleepAccent else SleepAccent.copy(alpha = 0.46f)
+                            drawRoundRect(
+                                color = fill,
+                                topLeft = Offset(left, topY),
+                                size = Size(capsuleW, capH),
+                                cornerRadius = CornerRadius(capsuleW / 2f, capsuleW / 2f),
+                            )
+                            val dotR = minOf(capsuleW * 0.24f, 2.4.dp.toPx())
+                            drawCircle(
+                                color = Color.White.copy(alpha = if (isSelected) 0.92f else 0.75f),
+                                radius = dotR,
+                                center = Offset(centerX, topY + dotR + 2.dp.toPx()),
+                            )
+                            drawCircle(
+                                color = Color.White.copy(alpha = if (isSelected) 0.92f else 0.75f),
+                                radius = dotR,
+                                center = Offset(centerX, topY + capH - dotR - 2.dp.toPx()),
+                            )
+                        } else if (night.durationMinutes > 0) {
+                            val ratio = (night.durationMinutes.toFloat() / maxDuration.toFloat()).coerceIn(0.12f, 1f)
+                            val barH = maxOf(8.dp.toPx(), usableH * ratio)
+                            val barTop = h - padY - barH
+                            drawRoundRect(
+                                color = if (isSelected) SleepAccent else SleepAccent.copy(alpha = 0.35f),
+                                topLeft = Offset(left, barTop),
+                                size = Size(capsuleW, barH),
+                                cornerRadius = CornerRadius(capsuleW / 2f, capsuleW / 2f),
+                            )
+                        } else {
+                            drawCircle(
+                                color = gridColor,
+                                radius = 2.dp.toPx(),
+                                center = Offset(centerX, h * 0.5f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (isSevenOrFewer) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "入睡",
+                    fontSize = 9.sp,
+                    color = PacePalette.TextSecondary,
+                    modifier = Modifier.width(railWidth),
+                )
+                nights.forEachIndexed { idx, night ->
+                    Text(
+                        text = night.bedtimeHHMM.ifBlank { "--" },
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.Normal,
+                        color = if (night.bedtimeHHMM.isNotBlank()) {
+                            if (idx == safeIndex) SleepAccent else PacePalette.TextPrimary
+                        } else {
+                            PacePalette.TextSecondary.copy(alpha = 0.55f)
+                        },
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "醒来",
+                    fontSize = 9.sp,
+                    color = PacePalette.TextSecondary,
+                    modifier = Modifier.width(railWidth),
+                )
+                nights.forEachIndexed { idx, night ->
+                    Text(
+                        text = night.wakeHHMM.ifBlank { "--" },
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.Normal,
+                        color = if (night.wakeHHMM.isNotBlank()) {
+                            if (idx == safeIndex) SleepAccent else PacePalette.TextPrimary
+                        } else {
+                            PacePalette.TextSecondary.copy(alpha = 0.55f)
+                        },
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "日期",
+                    fontSize = 9.sp,
+                    color = PacePalette.TextSecondary,
+                    modifier = Modifier.width(railWidth),
+                )
+                nights.forEachIndexed { idx, night ->
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = night.shortDate,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.Normal,
+                            color = if (idx == safeIndex) SleepAccent else PacePalette.TextSecondary,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                        Text(
+                            text = night.weekday,
+                            fontSize = 9.sp,
+                            color = if (idx == safeIndex) SleepAccent else PacePalette.TextSecondary,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+            }
+        } else {
+            val tickIndices = remember(nights.size) {
+                listOf(
+                    0,
+                    nights.lastIndex / 4,
+                    nights.lastIndex / 2,
+                    (nights.lastIndex * 3) / 4,
+                    nights.lastIndex,
+                ).distinct()
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = railWidth, end = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                tickIndices.forEach { idx ->
+                    val night = nights[idx]
+                    Text(
+                        text = night.shortDate,
+                        fontSize = 10.sp,
+                        color = if (idx == safeIndex) SleepAccent else PacePalette.TextSecondary,
+                        fontWeight = if (idx == safeIndex) FontWeight.SemiBold else FontWeight.Normal,
+                    )
                 }
             }
         }

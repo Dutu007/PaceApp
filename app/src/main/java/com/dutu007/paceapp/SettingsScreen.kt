@@ -384,7 +384,7 @@ fun SettingsScreen(
                 item {
                     SettingsRow(
                         title = "立即同步桌面组件",
-                        subtitle = "$lastWidgetSync · 桌面长按空白处 -> 原子组件 -> Pace 添加（支持 2×2 / 4×2 / 4×4）",
+                        subtitle = "$lastWidgetSync · 共 5 款（实验室/睡眠 2×2 · 4×2 · 4×4），桌面长按 -> 原子组件 -> Pace 添加",
                         onClick = {
                             viewModel.triggerWidgetRefresh()
                             lastWidgetSync = WidgetDataStore.lastSyncFormatted(context)

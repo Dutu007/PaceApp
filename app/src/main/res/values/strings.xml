@@ -4,8 +4,10 @@
     <string name="widget_lab_desc">展示今日与近7天实验室学习趋势，支持桌面一键打卡/签退</string>
     <string name="widget_lab_compact_label">实验室学习（小号）</string>
     <string name="widget_lab_compact_desc">2×2 紧凑卡片，查看今日实验室学习时长并一键打卡/签退</string>
-    <string name="widget_sleep_label">睡眠时长趋势</string>
-    <string name="widget_sleep_desc">展示最近睡眠时长、评分与近7天趋势图</string>
+    <string name="widget_sleep_label">睡眠作息详情</string>
+    <string name="widget_sleep_desc">4×2 卡片，同屏展示近7晚睡眠时长、入睡/醒来时间及睡眠评分</string>
+    <string name="widget_sleep_compact_label">睡眠概览（小号）</string>
+    <string name="widget_sleep_compact_desc">2×2 紧凑卡片，查看最近睡眠时长、评分、入睡与醒来时间</string>
     <string name="widget_overview_label">Pace 数据总览</string>
     <string name="widget_overview_desc">4×4 大号看板，同时展示实验室学习与睡眠近7天趋势</string>
 </resources>

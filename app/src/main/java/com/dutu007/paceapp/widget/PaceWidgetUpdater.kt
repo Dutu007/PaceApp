@@ -9,8 +9,13 @@ import android.view.View
 import android.widget.RemoteViews
 import com.dutu007.paceapp.MainActivity
 import com.dutu007.paceapp.R
+import com.dutu007.paceapp.averageBedtimeClock
+import com.dutu007.paceapp.averageWakeClock
 import com.dutu007.paceapp.data.PaceRepository
+import com.dutu007.paceapp.extractClockHHMM
+import com.dutu007.paceapp.formatCompactDuration
 import com.dutu007.paceapp.formatDurationMinutes
+import com.dutu007.paceapp.sleepScoreColorInt
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -28,8 +33,13 @@ object PaceWidgetUpdater {
         val labIds = mgr.getAppWidgetIds(ComponentName(context, LabStudyWidgetProvider::class.java))
         val compactIds = mgr.getAppWidgetIds(ComponentName(context, LabCompactWidgetProvider::class.java))
         val sleepIds = mgr.getAppWidgetIds(ComponentName(context, SleepTrendWidgetProvider::class.java))
+        val sleepCompactIds = mgr.getAppWidgetIds(ComponentName(context, SleepCompactWidgetProvider::class.java))
         val overviewIds = mgr.getAppWidgetIds(ComponentName(context, PaceOverviewWidgetProvider::class.java))
-        return labIds.isNotEmpty() || compactIds.isNotEmpty() || sleepIds.isNotEmpty() || overviewIds.isNotEmpty()
+        return labIds.isNotEmpty() ||
+            compactIds.isNotEmpty() ||
+            sleepIds.isNotEmpty() ||
+            sleepCompactIds.isNotEmpty() ||
+            overviewIds.isNotEmpty()
     }
 
     fun updateAllWidgets(context: Context) {
@@ -45,6 +55,10 @@ object PaceWidgetUpdater {
         val sleepIds = mgr.getAppWidgetIds(ComponentName(context, SleepTrendWidgetProvider::class.java))
         if (sleepIds.isNotEmpty()) {
             mgr.updateAppWidget(sleepIds, buildSleepRemoteViews(context))
+        }
+        val sleepCompactIds = mgr.getAppWidgetIds(ComponentName(context, SleepCompactWidgetProvider::class.java))
+        if (sleepCompactIds.isNotEmpty()) {
+            mgr.updateAppWidget(sleepCompactIds, buildCompactSleepRemoteViews(context))
         }
         val overviewIds = mgr.getAppWidgetIds(ComponentName(context, PaceOverviewWidgetProvider::class.java))
         if (overviewIds.isNotEmpty()) {
@@ -193,6 +207,52 @@ object PaceWidgetUpdater {
         return views
     }
 
+    private data class ResolvedSleepSummary(
+        val nights: List<WidgetSleepNight>,
+        val shortDate: String,
+        val latestDurationMinutes: Int,
+        val latestBedtime: String,
+        val latestWakeTime: String,
+        val latestScore: Int?,
+        val avgBedtime: String,
+        val avgWakeTime: String,
+    )
+
+    private fun resolveSleepSummary(snapshot: WidgetSnapshot): ResolvedSleepSummary {
+        val nights = if (snapshot.sleepRecentNights.isNotEmpty()) {
+            snapshot.sleepRecentNights
+        } else {
+            snapshot.sleepDailySeries.map { pt ->
+                WidgetSleepNight(
+                    date = pt.date,
+                    durationMinutes = pt.value.toInt(),
+                )
+            }
+        }
+        val latest = nights.lastOrNull { it.durationMinutes > 0 }
+        val latestDate = latest?.date?.ifBlank { snapshot.latestSleepDate } ?: snapshot.latestSleepDate
+        val shortDate = if (latestDate.length >= 10) latestDate.substring(5) else latestDate
+        val latestDuration = latest?.durationMinutes ?: snapshot.latestSleepMinutes
+        val latestBed = extractClockHHMM(
+            latest?.bedtime?.ifBlank { snapshot.latestSleepBedtime } ?: snapshot.latestSleepBedtime,
+        )
+        val latestWake = extractClockHHMM(
+            latest?.wakeTime?.ifBlank { snapshot.latestSleepWakeTime } ?: snapshot.latestSleepWakeTime,
+        )
+        val latestScore = latest?.score ?: snapshot.latestSleepScore ?: snapshot.sleepAvgScore
+        val activeNights = nights.filter { it.durationMinutes > 0 }
+        return ResolvedSleepSummary(
+            nights = nights,
+            shortDate = shortDate,
+            latestDurationMinutes = latestDuration,
+            latestBedtime = latestBed,
+            latestWakeTime = latestWake,
+            latestScore = latestScore,
+            avgBedtime = averageBedtimeClock(activeNights.map { it.bedtime }),
+            avgWakeTime = averageWakeClock(activeNights.map { it.wakeTime }),
+        )
+    }
+
     private fun buildSleepRemoteViews(context: Context): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.widget_sleep_trend)
         val hasSession = PaceRepository(context).hasSession()
@@ -208,14 +268,13 @@ object PaceWidgetUpdater {
         if (!hasSession) {
             views.setTextViewText(R.id.widget_sleep_badge, "未登录")
             views.setViewVisibility(R.id.widget_sleep_score, View.GONE)
+            views.setViewVisibility(R.id.widget_sleep_window, View.GONE)
             views.setImageViewBitmap(
                 R.id.widget_sleep_chart,
-                WidgetChartRenderer.renderSevenDayBarChart(
+                WidgetChartRenderer.renderSleepTimelineChart(
                     context = context,
-                    points = emptyList(),
-                    accentColor = 0xFF5B5CE2.toInt(),
-                    emptyLabel = "点击打开 PaceApp 登录后同步睡眠数据",
-                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                    nights = emptyList(),
+                    emptyLabel = "点击打开 Pace 登录后同步睡眠数据",
                 ),
             )
             views.setTextViewText(R.id.widget_sleep_footer_left, "支持 COROS 手表同步")
@@ -226,14 +285,13 @@ object PaceWidgetUpdater {
         if (snapshot == null || !snapshot.sleepHasData) {
             views.setTextViewText(R.id.widget_sleep_badge, "待接入")
             views.setViewVisibility(R.id.widget_sleep_score, View.GONE)
+            views.setViewVisibility(R.id.widget_sleep_window, View.GONE)
             views.setImageViewBitmap(
                 R.id.widget_sleep_chart,
-                WidgetChartRenderer.renderSevenDayBarChart(
+                WidgetChartRenderer.renderSleepTimelineChart(
                     context = context,
-                    points = emptyList(),
-                    accentColor = 0xFF5B5CE2.toInt(),
+                    nights = emptyList(),
                     emptyLabel = "待接入高驰 COROS 或手动睡眠数据",
-                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
                 ),
             )
             views.setTextViewText(R.id.widget_sleep_footer_left, "在 Pace 同步高驰或手动录入后展示")
@@ -244,30 +302,50 @@ object PaceWidgetUpdater {
             return views
         }
 
-        views.setTextViewText(R.id.widget_sleep_badge, "昨夜 ${formatDurationMinutes(snapshot.latestSleepMinutes)}")
-        val score = snapshot.sleepAvgScore
+        val resolved = resolveSleepSummary(snapshot)
+        val badgeText = buildString {
+            if (resolved.shortDate.isNotBlank()) {
+                append(resolved.shortDate)
+                append(" ")
+            }
+            append(formatCompactDuration(resolved.latestDurationMinutes))
+        }
+        views.setTextViewText(R.id.widget_sleep_badge, badgeText)
+
+        val score = resolved.latestScore
         if (score != null && score > 0) {
             views.setViewVisibility(R.id.widget_sleep_score, View.VISIBLE)
             views.setTextViewText(R.id.widget_sleep_score, "${score}分")
+            views.setTextColor(R.id.widget_sleep_score, sleepScoreColorInt(score))
         } else {
             views.setViewVisibility(R.id.widget_sleep_score, View.GONE)
         }
 
-        val sleepPoints = WidgetDataStore.toDailyPoints(snapshot.sleepDailySeries)
+        if (resolved.latestBedtime.isNotBlank() || resolved.latestWakeTime.isNotBlank()) {
+            views.setViewVisibility(R.id.widget_sleep_window, View.VISIBLE)
+            views.setTextViewText(
+                R.id.widget_sleep_window,
+                "${resolved.latestBedtime.ifBlank { "--:--" }}→${resolved.latestWakeTime.ifBlank { "--:--" }}",
+            )
+        } else {
+            views.setViewVisibility(R.id.widget_sleep_window, View.GONE)
+        }
+
         views.setImageViewBitmap(
             R.id.widget_sleep_chart,
-            WidgetChartRenderer.renderSevenDayBarChart(
+            WidgetChartRenderer.renderSleepTimelineChart(
                 context = context,
-                points = sleepPoints,
-                accentColor = 0xFF5B5CE2.toInt(),
-                emptyLabel = "近 7 天暂无睡眠曲线",
-                valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                nights = resolved.nights,
+                emptyLabel = "近 7 晚暂无睡眠记录",
             ),
         )
-        views.setTextViewText(
-            R.id.widget_sleep_footer_left,
-            "近期均睡 ${formatDurationMinutes(snapshot.avgSleepMinutes)}",
-        )
+        val avgSummary = buildString {
+            append("均睡 ${formatCompactDuration(snapshot.avgSleepMinutes)}")
+            if (resolved.avgBedtime != "--:--" || resolved.avgWakeTime != "--:--") {
+                append(" · 平均 ${resolved.avgBedtime}→${resolved.avgWakeTime}")
+            }
+        }
+        views.setTextViewText(R.id.widget_sleep_footer_left, avgSummary)
         views.setTextViewText(
             R.id.widget_sleep_footer_right,
             if (lastError.isNotBlank()) "同步受限" else WidgetDataStore.lastSyncFormatted(context),
@@ -329,6 +407,80 @@ object PaceWidgetUpdater {
         return views
     }
 
+    private fun buildCompactSleepRemoteViews(context: Context): RemoteViews {
+        val views = RemoteViews(context.packageName, R.layout.widget_sleep_compact)
+        val hasSession = PaceRepository(context).hasSession()
+        val snapshot = WidgetDataStore.loadSnapshot(context)
+        val lastError = WidgetDataStore.lastError(context)
+
+        views.setOnClickPendingIntent(R.id.widget_sleep_compact_root, buildOpenAnalyticsIntent(context, 501))
+        views.setOnClickPendingIntent(
+            R.id.widget_sleep_compact_refresh,
+            buildProviderActionIntent(context, SleepCompactWidgetProvider::class.java, ACTION_WIDGET_REFRESH, 502),
+        )
+
+        if (!hasSession) {
+            views.setImageViewResource(R.id.widget_sleep_compact_dot, R.drawable.widget_dot_indigo)
+            views.setTextViewText(R.id.widget_sleep_compact_duration, "未登录")
+            views.setTextColor(R.id.widget_sleep_compact_duration, 0xFF5A6B78.toInt())
+            views.setViewVisibility(R.id.widget_sleep_compact_score, View.GONE)
+            views.setTextViewText(R.id.widget_sleep_compact_bedtime, "--:--")
+            views.setTextViewText(R.id.widget_sleep_compact_wake, "--:--")
+            views.setTextViewText(R.id.widget_sleep_compact_footer, "点卡片登录 Pace")
+            views.setTextViewText(R.id.widget_sleep_compact_sync, "")
+            return views
+        }
+
+        if (snapshot == null || !snapshot.sleepHasData) {
+            views.setImageViewResource(R.id.widget_sleep_compact_dot, R.drawable.widget_dot_indigo)
+            views.setTextViewText(R.id.widget_sleep_compact_duration, "--")
+            views.setTextColor(R.id.widget_sleep_compact_duration, 0xFF5B5CE2.toInt())
+            views.setViewVisibility(R.id.widget_sleep_compact_score, View.GONE)
+            views.setTextViewText(R.id.widget_sleep_compact_bedtime, "--:--")
+            views.setTextViewText(R.id.widget_sleep_compact_wake, "--:--")
+            views.setTextViewText(
+                R.id.widget_sleep_compact_footer,
+                if (lastError.isNotBlank()) "同步受限" else "点刷新同步",
+            )
+            views.setTextViewText(
+                R.id.widget_sleep_compact_sync,
+                if (snapshot == null) "" else WidgetDataStore.lastSyncFormatted(context).removeSuffix(" 同步"),
+            )
+            return views
+        }
+
+        val resolved = resolveSleepSummary(snapshot)
+        views.setImageViewResource(R.id.widget_sleep_compact_dot, R.drawable.widget_dot_indigo)
+        views.setTextViewText(
+            R.id.widget_sleep_compact_duration,
+            formatCompactDuration(resolved.latestDurationMinutes),
+        )
+        views.setTextColor(R.id.widget_sleep_compact_duration, 0xFF5B5CE2.toInt())
+
+        val score = resolved.latestScore
+        if (score != null && score > 0) {
+            views.setViewVisibility(R.id.widget_sleep_compact_score, View.VISIBLE)
+            views.setTextViewText(R.id.widget_sleep_compact_score, "${score}分")
+            views.setTextColor(R.id.widget_sleep_compact_score, sleepScoreColorInt(score))
+        } else {
+            views.setViewVisibility(R.id.widget_sleep_compact_score, View.GONE)
+        }
+
+        views.setTextViewText(R.id.widget_sleep_compact_bedtime, resolved.latestBedtime.ifBlank { "--:--" })
+        views.setTextViewText(R.id.widget_sleep_compact_wake, resolved.latestWakeTime.ifBlank { "--:--" })
+
+        val footerText = listOfNotNull(
+            resolved.shortDate.ifBlank { null },
+            "均 ${formatCompactDuration(snapshot.avgSleepMinutes)}",
+        ).joinToString(" · ")
+        views.setTextViewText(R.id.widget_sleep_compact_footer, footerText)
+        views.setTextViewText(
+            R.id.widget_sleep_compact_sync,
+            if (lastError.isNotBlank()) "受限" else WidgetDataStore.lastSyncFormatted(context).removeSuffix(" 同步"),
+        )
+        return views
+    }
+
     private fun buildOverviewRemoteViews(context: Context): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.widget_pace_overview)
         val hasSession = PaceRepository(context).hasSession()
@@ -357,8 +509,8 @@ object PaceWidgetUpdater {
                     accentColor = 0xFF0E5A6F.toInt(),
                     emptyLabel = "点击打开 Pace 登录授权",
                     valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
-                    heightDp = 66f,
-                    maxDensityScale = 2.0f,
+                    heightDp = 56f,
+                    maxDensityScale = 1.9f,
                 ),
             )
             views.setTextViewText(R.id.widget_overview_sleep_badge, "未登录")
@@ -366,14 +518,14 @@ object PaceWidgetUpdater {
             views.setTextViewText(R.id.widget_overview_sleep_sub, "")
             views.setImageViewBitmap(
                 R.id.widget_overview_sleep_chart,
-                WidgetChartRenderer.renderSevenDayBarChart(
+                WidgetChartRenderer.renderSleepTimelineChart(
                     context = context,
-                    points = emptyList(),
-                    accentColor = 0xFF5B5CE2.toInt(),
+                    nights = emptyList(),
                     emptyLabel = "登录后同步 COROS / 睡眠记录",
-                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
-                    heightDp = 66f,
-                    maxDensityScale = 2.0f,
+                    heightDp = 96f,
+                    widthDp = 310f,
+                    maxDensityScale = 1.9f,
+                    compactMode = true,
                 ),
             )
             views.setTextViewText(R.id.widget_overview_footer, "点击进入 PaceApp")
@@ -400,8 +552,8 @@ object PaceWidgetUpdater {
                     accentColor = 0xFF0E5A6F.toInt(),
                     emptyLabel = if (lastError.isNotBlank()) lastError else "正在拉取数据...",
                     valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
-                    heightDp = 66f,
-                    maxDensityScale = 2.0f,
+                    heightDp = 56f,
+                    maxDensityScale = 1.9f,
                 ),
             )
             views.setTextViewText(R.id.widget_overview_sleep_badge, "同步中")
@@ -409,14 +561,14 @@ object PaceWidgetUpdater {
             views.setTextViewText(R.id.widget_overview_sleep_sub, "")
             views.setImageViewBitmap(
                 R.id.widget_overview_sleep_chart,
-                WidgetChartRenderer.renderSevenDayBarChart(
+                WidgetChartRenderer.renderSleepTimelineChart(
                     context = context,
-                    points = emptyList(),
-                    accentColor = 0xFF5B5CE2.toInt(),
+                    nights = emptyList(),
                     emptyLabel = "等待睡眠数据同步",
-                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
-                    heightDp = 66f,
-                    maxDensityScale = 2.0f,
+                    heightDp = 96f,
+                    widthDp = 310f,
+                    maxDensityScale = 1.9f,
+                    compactMode = true,
                 ),
             )
             views.setTextViewText(R.id.widget_overview_footer, "点击右上角刷新")
@@ -452,8 +604,8 @@ object PaceWidgetUpdater {
                 accentColor = 0xFF0E5A6F.toInt(),
                 emptyLabel = "近 7 天暂无实验室打卡",
                 valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
-                heightDp = 66f,
-                maxDensityScale = 2.0f,
+                heightDp = 56f,
+                maxDensityScale = 1.9f,
             ),
         )
 
@@ -463,36 +615,53 @@ object PaceWidgetUpdater {
             views.setTextViewText(R.id.widget_overview_sleep_sub, "支持 COROS / 手动")
             views.setImageViewBitmap(
                 R.id.widget_overview_sleep_chart,
-                WidgetChartRenderer.renderSevenDayBarChart(
+                WidgetChartRenderer.renderSleepTimelineChart(
                     context = context,
-                    points = emptyList(),
-                    accentColor = 0xFF5B5CE2.toInt(),
-                    emptyLabel = "同步高驰或手动记录后展示睡眠曲线",
-                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
-                    heightDp = 66f,
-                    maxDensityScale = 2.0f,
+                    nights = emptyList(),
+                    emptyLabel = "同步高驰或手动记录后展示作息图",
+                    heightDp = 96f,
+                    widthDp = 310f,
+                    maxDensityScale = 1.9f,
+                    compactMode = true,
                 ),
             )
         } else {
-            views.setTextViewText(R.id.widget_overview_sleep_badge, "昨夜 ${formatDurationMinutes(snapshot.latestSleepMinutes)}")
-            val score = snapshot.sleepAvgScore
+            val resolved = resolveSleepSummary(snapshot)
+            val badgeText = buildString {
+                if (resolved.shortDate.isNotBlank()) {
+                    append(resolved.shortDate)
+                    append(" ")
+                }
+                append(formatCompactDuration(resolved.latestDurationMinutes))
+            }
+            views.setTextViewText(R.id.widget_overview_sleep_badge, badgeText)
+
+            val score = resolved.latestScore
             if (score != null && score > 0) {
                 views.setViewVisibility(R.id.widget_overview_sleep_score, View.VISIBLE)
                 views.setTextViewText(R.id.widget_overview_sleep_score, "${score}分")
+                views.setTextColor(R.id.widget_overview_sleep_score, sleepScoreColorInt(score))
             } else {
                 views.setViewVisibility(R.id.widget_overview_sleep_score, View.GONE)
             }
-            views.setTextViewText(R.id.widget_overview_sleep_sub, "均睡 ${formatDurationMinutes(snapshot.avgSleepMinutes)}")
+
+            val subParts = buildList {
+                if (resolved.latestBedtime.isNotBlank() || resolved.latestWakeTime.isNotBlank()) {
+                    add("${resolved.latestBedtime.ifBlank { "--:--" }}→${resolved.latestWakeTime.ifBlank { "--:--" }}")
+                }
+                add("均 ${formatCompactDuration(snapshot.avgSleepMinutes)}")
+            }
+            views.setTextViewText(R.id.widget_overview_sleep_sub, subParts.joinToString(" · "))
             views.setImageViewBitmap(
                 R.id.widget_overview_sleep_chart,
-                WidgetChartRenderer.renderSevenDayBarChart(
+                WidgetChartRenderer.renderSleepTimelineChart(
                     context = context,
-                    points = WidgetDataStore.toDailyPoints(snapshot.sleepDailySeries),
-                    accentColor = 0xFF5B5CE2.toInt(),
-                    emptyLabel = "近 7 天暂无睡眠曲线",
-                    valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
-                    heightDp = 66f,
-                    maxDensityScale = 2.0f,
+                    nights = resolved.nights,
+                    emptyLabel = "近 7 晚暂无睡眠记录",
+                    heightDp = 96f,
+                    widthDp = 310f,
+                    maxDensityScale = 1.9f,
+                    compactMode = true,
                 ),
             )
         }

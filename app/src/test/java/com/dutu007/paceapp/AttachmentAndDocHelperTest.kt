@@ -128,4 +128,29 @@ class AttachmentAndDocHelperTest {
         assertEquals("exports/周汇总.xlsx", chips[1].docPath)
         assertFalse(chips[1].isImage)
     }
+
+    @Test
+    fun parsesSleepClocksAndAveragesAcrossMidnight() {
+        assertEquals("23:59", extractClockHHMM("2026-11-20 23:59"))
+        assertEquals("08:55", extractClockHHMM("2026-11-21T08:55:00+08:00"))
+        assertEquals("07:05", extractClockHHMM("7:05"))
+        assertEquals("", extractClockHHMM("2026-11-21"))
+
+        assertEquals(1439, parseClockMinutes("23:59"))
+        assertEquals(1439, sleepAxisOffsetMinutes(1439))
+        assertEquals(1498, sleepAxisOffsetMinutes(58))
+        assertEquals("00:58", formatAxisOffsetClock(1498))
+
+        assertEquals("00:00", averageBedtimeClock(listOf("2026-11-20 23:50", "2026-11-21 00:10")))
+        assertEquals("08:35", averageWakeClock(listOf("07:15", "09:55")))
+
+        assertEquals("--", formatCompactDuration(0))
+        assertEquals("8h03m", formatCompactDuration(483))
+        assertEquals("9h", formatCompactDuration(540))
+        assertEquals("45m", formatCompactDuration(45))
+
+        assertEquals(0xFF0E9F6E.toInt(), sleepScoreColorInt(90))
+        assertEquals(0xFFD97706.toInt(), sleepScoreColorInt(77))
+        assertEquals(0xFFDC2626.toInt(), sleepScoreColorInt(57))
+    }
 }
