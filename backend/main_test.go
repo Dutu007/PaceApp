@@ -541,6 +541,128 @@ func TestSttTranscribe(t *testing.T) {
 	}
 }
 
+func TestAnalyticsDashboardAndMutations(t *testing.T) {
+	var seenListSource string
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/sessions" {
+			seenListSource = r.URL.Query().Get("source")
+			_, _ = w.Write([]byte(`{"data":[{"id":"s1","title":"Demo","source":"api_server","message_count":2}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	token, _, _ := srv.auth.issueToken(time.Now())
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+
+	// Seed Hermes's exact lab/sessions.json schema
+	todayStr := time.Now().In(srv.docs.tz).Format("2006-01-02")
+	_ = os.MkdirAll(filepath.Join(srv.docs.assistantDir, "lab"), 0o755)
+	_ = os.WriteFile(filepath.Join(srv.docs.assistantDir, "lab", "sessions.json"), []byte(fmt.Sprintf(`{
+		"note": "实验室学习打卡记录",
+		"sessions": [
+			{"date": "%s", "arrive": "%s 10:03", "leave": "%s 12:11", "minutes": 128}
+		]
+	}`, todayStr, todayStr, todayStr)), 0o644)
+
+	// Seed running image + notes.json + custom metric
+	runDir := filepath.Join(srv.docs.assistantDir, "images", "running")
+	_ = os.MkdirAll(runDir, 0o755)
+	_ = os.WriteFile(filepath.Join(runDir, "跑步_11-19.jpg"), []byte("fakejpg"), 0o644)
+	_ = os.WriteFile(filepath.Join(runDir, "notes.json"), []byte(`{"11-19":["简单慢跑3.75km"]}`), 0o644)
+
+	_ = os.MkdirAll(filepath.Join(srv.docs.assistantDir, "metrics"), 0o755)
+	_ = os.WriteFile(filepath.Join(srv.docs.assistantDir, "metrics", "reading.json"), []byte(fmt.Sprintf(`{
+		"id":"reading","name":"论文阅读","unit":"篇","color":"#6D28D9","goal":2,
+		"records":[{"date":"%s","value":2,"note":"精读两篇"}]
+	}`, todayStr)), 0o644)
+
+	doJSON := func(method, url, payload string) *http.Response {
+		req, _ := http.NewRequest(method, url, strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	// Verify GET /api/v1/sessions?source=paceapp forwards source=api_server upstream
+	sessResp := doJSON(http.MethodGet, api.URL+"/api/v1/sessions?source=paceapp", "")
+	sessResp.Body.Close()
+	if sessResp.StatusCode != http.StatusOK || seenListSource != "api_server" {
+		t.Fatalf("expected source=paceapp -> api_server, got status=%d seen=%q", sessResp.StatusCode, seenListSource)
+	}
+
+	// Verify initial analytics read (sleep absent => has_data false, lab=128m, running=1)
+	r1 := doJSON(http.MethodGet, api.URL+"/api/v1/analytics?range=7d", "")
+	var dash1 analyticsDashboardResponse
+	_ = json.NewDecoder(r1.Body).Decode(&dash1)
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 analytics, got %d", r1.StatusCode)
+	}
+	if dash1.Lab.TodayMinutes != 128 || dash1.Lab.SessionCount != 1 {
+		t.Fatalf("unexpected lab metrics: %+v", dash1.Lab)
+	}
+	if dash1.Sleep.HasData {
+		t.Fatalf("expected sleep.has_data=false when sleep/records.json missing")
+	}
+	if dash1.Running.TotalRuns != 1 || dash1.Running.TotalDistanceKm != 3.75 {
+		t.Fatalf("unexpected running metrics: %+v", dash1.Running)
+	}
+	if len(dash1.CustomMetrics) != 1 || dash1.CustomMetrics[0].LatestValue != 2 {
+		t.Fatalf("unexpected custom metrics: %+v", dash1.CustomMetrics)
+	}
+
+	// Verify sleep upsert -> has_data=true
+	sr := doJSON(http.MethodPost, api.URL+"/api/v1/analytics/sleep", fmt.Sprintf(`{"date":"%s","bedtime":"23:30","wake_time":"07:20","score":88,"note":"睡得不错"}`, todayStr))
+	sr.Body.Close()
+	if sr.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 sleep upsert, got %d", sr.StatusCode)
+	}
+
+	// Verify lab checkin -> duplicate 409 -> checkout -> manual backfill -> delete
+	c1 := doJSON(http.MethodPost, api.URL+"/api/v1/analytics/lab/checkin", `{"note":"下午实验"}`)
+	c1.Body.Close()
+	if c1.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 checkin, got %d", c1.StatusCode)
+	}
+	cDup := doJSON(http.MethodPost, api.URL+"/api/v1/analytics/lab/checkin", `{}`)
+	cDup.Body.Close()
+	if cDup.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 duplicate checkin, got %d", cDup.StatusCode)
+	}
+	co := doJSON(http.MethodPost, api.URL+"/api/v1/analytics/lab/checkout", `{}`)
+	co.Body.Close()
+	if co.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 checkout, got %d", co.StatusCode)
+	}
+
+	mResp := doJSON(http.MethodPost, api.URL+"/api/v1/analytics/lab/sessions", fmt.Sprintf(`{"date":"%s","arrive":"19:00","leave":"21:30","note":"补录晚间"}`, todayStr))
+	var created labSessionItem
+	_ = json.NewDecoder(mResp.Body).Decode(&created)
+	mResp.Body.Close()
+	if mResp.StatusCode != http.StatusCreated || created.Minutes == nil || *created.Minutes != 150 {
+		t.Fatalf("expected 150m manual backfill, status=%d item=%+v", mResp.StatusCode, created)
+	}
+
+	delResp := doJSON(http.MethodDelete, api.URL+"/api/v1/analytics/lab/sessions?arrive="+strings.ReplaceAll(created.Arrive, " ", "%20"), "")
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 delete session, got %d", delResp.StatusCode)
+	}
+
+	r2 := doJSON(http.MethodGet, api.URL+"/api/v1/analytics?range=30d", "")
+	var dash2 analyticsDashboardResponse
+	_ = json.NewDecoder(r2.Body).Decode(&dash2)
+	r2.Body.Close()
+	if !dash2.Sleep.HasData || dash2.Sleep.LatestDurationMinutes != 470 {
+		t.Fatalf("expected sleep duration 470 min (23:30->07:20), got %+v", dash2.Sleep)
+	}
+}
+
 func newTestZip(buf *bytes.Buffer) *zip.Writer {
 	return zip.NewWriter(buf)
 }

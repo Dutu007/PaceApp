@@ -241,6 +241,158 @@ private data class UploadFileResponseDto(
     @SerialName("extracted_text") val extractedText: String = "",
 )
 
+@Serializable
+private data class DailyMetricPointDto(
+    val date: String = "",
+    val label: String = "",
+    val weekday: String = "",
+    val value: Double = 0.0,
+    val count: Int = 0,
+)
+
+@Serializable
+private data class LabSessionItemDto(
+    val date: String = "",
+    val arrive: String = "",
+    val leave: String? = null,
+    val minutes: Int? = null,
+    val note: String = "",
+)
+
+@Serializable
+private data class LabAnalyticsDto(
+    @SerialName("active_session") val activeSession: LabSessionItemDto? = null,
+    @SerialName("active_elapsed_minutes") val activeElapsedMinutes: Int = 0,
+    @SerialName("today_minutes") val todayMinutes: Int = 0,
+    @SerialName("week_minutes") val weekMinutes: Int = 0,
+    @SerialName("month_minutes") val monthMinutes: Int = 0,
+    @SerialName("total_minutes") val totalMinutes: Int = 0,
+    @SerialName("session_count") val sessionCount: Int = 0,
+    @SerialName("avg_daily_minutes") val avgDailyMinutes: Int = 0,
+    @SerialName("streak_days") val streakDays: Int = 0,
+    @SerialName("daily_series") val dailySeries: List<DailyMetricPointDto> = emptyList(),
+    @SerialName("recent_sessions") val recentSessions: List<LabSessionItemDto> = emptyList(),
+)
+
+@Serializable
+private data class SleepDailyPointDto(
+    val date: String = "",
+    val label: String = "",
+    val weekday: String = "",
+    @SerialName("duration_minutes") val durationMinutes: Int = 0,
+    @SerialName("deep_minutes") val deepMinutes: Int? = null,
+    @SerialName("light_minutes") val lightMinutes: Int? = null,
+    @SerialName("rem_minutes") val remMinutes: Int? = null,
+    val score: Int? = null,
+    val bedtime: String = "",
+    @SerialName("wake_time") val wakeTime: String = "",
+)
+
+@Serializable
+private data class SleepRecordItemDto(
+    val date: String = "",
+    val bedtime: String = "",
+    @SerialName("wake_time") val wakeTime: String = "",
+    @SerialName("duration_minutes") val durationMinutes: Int = 0,
+    @SerialName("deep_minutes") val deepMinutes: Int? = null,
+    @SerialName("light_minutes") val lightMinutes: Int? = null,
+    @SerialName("rem_minutes") val remMinutes: Int? = null,
+    @SerialName("awake_minutes") val awakeMinutes: Int? = null,
+    val score: Int? = null,
+    val source: String = "",
+    val note: String = "",
+)
+
+@Serializable
+private data class SleepAnalyticsDto(
+    @SerialName("has_data") val hasData: Boolean = false,
+    @SerialName("avg_duration_minutes") val avgDurationMinutes: Int = 0,
+    @SerialName("latest_duration_minutes") val latestDurationMinutes: Int = 0,
+    @SerialName("avg_score") val avgScore: Int? = null,
+    @SerialName("record_count") val recordCount: Int = 0,
+    @SerialName("daily_series") val dailySeries: List<SleepDailyPointDto> = emptyList(),
+    @SerialName("recent_records") val recentRecords: List<SleepRecordItemDto> = emptyList(),
+)
+
+@Serializable
+private data class RunningRecordItemDto(
+    val date: String = "",
+    @SerialName("distance_km") val distanceKm: Double = 0.0,
+    @SerialName("duration_minutes") val durationMinutes: Int = 0,
+    val pace: String = "",
+    val source: String = "",
+    val note: String = "",
+    @SerialName("image_path") val imagePath: String = "",
+)
+
+@Serializable
+private data class RunningAnalyticsDto(
+    @SerialName("total_runs") val totalRuns: Int = 0,
+    @SerialName("runs_in_range") val runsInRange: Int = 0,
+    @SerialName("total_distance_km") val totalDistanceKm: Double = 0.0,
+    @SerialName("daily_series") val dailySeries: List<DailyMetricPointDto> = emptyList(),
+    @SerialName("recent_runs") val recentRuns: List<RunningRecordItemDto> = emptyList(),
+)
+
+@Serializable
+private data class CustomMetricSummaryDto(
+    val id: String = "",
+    val name: String = "",
+    val unit: String = "",
+    val color: String = "#0E5A6F",
+    val goal: Double = 0.0,
+    @SerialName("latest_value") val latestValue: Double = 0.0,
+    @SerialName("avg_value") val avgValue: Double = 0.0,
+    @SerialName("daily_series") val dailySeries: List<DailyMetricPointDto> = emptyList(),
+)
+
+@Serializable
+private data class AnalyticsOverviewDto(
+    @SerialName("today_lab_minutes") val todayLabMinutes: Int = 0,
+    @SerialName("week_lab_minutes") val weekLabMinutes: Int = 0,
+    @SerialName("total_lab_minutes") val totalLabMinutes: Int = 0,
+    @SerialName("lab_active") val labActive: Boolean = false,
+    @SerialName("avg_sleep_minutes") val avgSleepMinutes: Int = 0,
+    @SerialName("latest_sleep_minutes") val latestSleepMinutes: Int = 0,
+    @SerialName("sleep_has_data") val sleepHasData: Boolean = false,
+    @SerialName("running_count_30d") val runningCount30d: Int = 0,
+    @SerialName("running_total_count") val runningTotalCount: Int = 0,
+    @SerialName("lab_streak_days") val labStreakDays: Int = 0,
+)
+
+@Serializable
+private data class AnalyticsDashboardDto(
+    @SerialName("generated_at") val generatedAt: String = "",
+    val range: String = "7d",
+    val overview: AnalyticsOverviewDto = AnalyticsOverviewDto(),
+    val lab: LabAnalyticsDto = LabAnalyticsDto(),
+    val sleep: SleepAnalyticsDto = SleepAnalyticsDto(),
+    val running: RunningAnalyticsDto = RunningAnalyticsDto(),
+    @SerialName("custom_metrics") val customMetrics: List<CustomMetricSummaryDto> = emptyList(),
+)
+
+@Serializable
+private data class LabCheckNoteDto(val note: String = "")
+
+@Serializable
+private data class LabManualSessionRequestDto(
+    val date: String,
+    val arrive: String,
+    val leave: String,
+    val note: String = "",
+)
+
+@Serializable
+private data class SleepUpsertRequestDto(
+    val date: String,
+    val bedtime: String = "",
+    @SerialName("wake_time") val wakeTime: String = "",
+    @SerialName("duration_minutes") val durationMinutes: Int = 0,
+    val score: Int? = null,
+    val source: String = "manual",
+    val note: String = "",
+)
+
 class PaceRepository(context: Context) {
     private val preferences = context.getSharedPreferences("paceapp_session", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
@@ -326,15 +478,24 @@ class PaceRepository(context: Context) {
         client.delete("$baseUrl/api/v1/sessions/$sessionId") { auth() }.check()
     }
 
-    suspend fun loadMessages(sessionId: String): List<ChatMessage> {
-        val dto = client.get("$baseUrl/api/v1/sessions/$sessionId/messages") { auth() }
-            .bodyChecked<MessageListDto>()
-        return dto.data.mapIndexedNotNull { index, msg ->
-            if (msg.role == "system") return@mapIndexedNotNull null
+    suspend fun loadMessages(sessionId: String, limit: Int = 80): MessagePage {
+        val dto = client.get("$baseUrl/api/v1/sessions/$sessionId/messages") {
+            auth()
+            parameter("limit", limit)
+            parameter("order", "latest")
+        }.bodyChecked<MessageListDto>()
+        val seenIds = mutableMapOf<String, Int>()
+        val items = dto.data.mapNotNull { msg ->
+            if (msg.role == "system") return@mapNotNull null
             val text = extractContentText(msg.content)
-            if (text.isBlank() && msg.role != "assistant") return@mapIndexedNotNull null
+            if (text.isBlank() && msg.role != "assistant") return@mapNotNull null
+            val explicitId = msg.id?.let { if (it is JsonPrimitive) it.contentOrNull else null }?.takeIf { it.isNotBlank() }
+            val baseId = explicitId ?: "m_${msg.timestamp?.toString().orEmpty()}_${msg.role}_${text.hashCode()}"
+            val occ = seenIds.getOrDefault(baseId, 0)
+            seenIds[baseId] = occ + 1
+            val stableId = if (explicitId != null && occ == 0) explicitId else "${baseId}_$occ"
             ChatMessage(
-                id = msg.id?.let { if (it is JsonPrimitive) it.contentOrNull else null } ?: "msg_$index",
+                id = stableId,
                 role = msg.role,
                 content = text,
                 reasoning = msg.reasoning ?: msg.reasoningContent,
@@ -342,6 +503,7 @@ class PaceRepository(context: Context) {
                 timestamp = msg.timestamp,
             )
         }
+        return MessagePage(messages = items, rawCount = dto.data.size)
     }
 
     fun streamChat(
@@ -684,6 +846,153 @@ class PaceRepository(context: Context) {
         }
         return destFile
     }
+
+    suspend fun getAnalytics(range: String = "7d"): AnalyticsDashboard {
+        val dto = client.get("$baseUrl/api/v1/analytics") {
+            auth()
+            parameter("range", range)
+        }.bodyChecked<AnalyticsDashboardDto>()
+        return AnalyticsDashboard(
+            generatedAt = dto.generatedAt,
+            range = dto.range,
+            overview = AnalyticsOverview(
+                todayLabMinutes = dto.overview.todayLabMinutes,
+                weekLabMinutes = dto.overview.weekLabMinutes,
+                totalLabMinutes = dto.overview.totalLabMinutes,
+                labActive = dto.overview.labActive,
+                avgSleepMinutes = dto.overview.avgSleepMinutes,
+                latestSleepMinutes = dto.overview.latestSleepMinutes,
+                sleepHasData = dto.overview.sleepHasData,
+                runningCount30d = dto.overview.runningCount30d,
+                runningTotalCount = dto.overview.runningTotalCount,
+                labStreakDays = dto.overview.labStreakDays,
+            ),
+            lab = LabAnalytics(
+                activeSession = dto.lab.activeSession?.toDomain(),
+                activeElapsedMinutes = dto.lab.activeElapsedMinutes,
+                todayMinutes = dto.lab.todayMinutes,
+                weekMinutes = dto.lab.weekMinutes,
+                monthMinutes = dto.lab.monthMinutes,
+                totalMinutes = dto.lab.totalMinutes,
+                sessionCount = dto.lab.sessionCount,
+                avgDailyMinutes = dto.lab.avgDailyMinutes,
+                streakDays = dto.lab.streakDays,
+                dailySeries = dto.lab.dailySeries.map { it.toDomain() },
+                recentSessions = dto.lab.recentSessions.map { it.toDomain() },
+            ),
+            sleep = SleepAnalytics(
+                hasData = dto.sleep.hasData,
+                avgDurationMinutes = dto.sleep.avgDurationMinutes,
+                latestDurationMinutes = dto.sleep.latestDurationMinutes,
+                avgScore = dto.sleep.avgScore,
+                recordCount = dto.sleep.recordCount,
+                dailySeries = dto.sleep.dailySeries.map {
+                    SleepDailyPoint(
+                        date = it.date,
+                        label = it.label,
+                        weekday = it.weekday,
+                        durationMinutes = it.durationMinutes,
+                        deepMinutes = it.deepMinutes,
+                        lightMinutes = it.lightMinutes,
+                        remMinutes = it.remMinutes,
+                        score = it.score,
+                        bedtime = it.bedtime,
+                        wakeTime = it.wakeTime,
+                    )
+                },
+                recentRecords = dto.sleep.recentRecords.map {
+                    SleepRecordItem(
+                        date = it.date,
+                        bedtime = it.bedtime,
+                        wakeTime = it.wakeTime,
+                        durationMinutes = it.durationMinutes,
+                        deepMinutes = it.deepMinutes,
+                        lightMinutes = it.lightMinutes,
+                        remMinutes = it.remMinutes,
+                        awakeMinutes = it.awakeMinutes,
+                        score = it.score,
+                        source = it.source,
+                        note = it.note,
+                    )
+                },
+            ),
+            running = RunningAnalytics(
+                totalRuns = dto.running.totalRuns,
+                runsInRange = dto.running.runsInRange,
+                totalDistanceKm = dto.running.totalDistanceKm,
+                dailySeries = dto.running.dailySeries.map { it.toDomain() },
+                recentRuns = dto.running.recentRuns.map {
+                    RunningRecordItem(
+                        date = it.date,
+                        distanceKm = it.distanceKm,
+                        durationMinutes = it.durationMinutes,
+                        pace = it.pace,
+                        source = it.source,
+                        note = it.note,
+                        imagePath = it.imagePath,
+                    )
+                },
+            ),
+            customMetrics = dto.customMetrics.map { m ->
+                CustomMetricSummary(
+                    id = m.id,
+                    name = m.name,
+                    unit = m.unit,
+                    colorHex = m.color,
+                    goal = m.goal,
+                    latestValue = m.latestValue,
+                    avgValue = m.avgValue,
+                    dailySeries = m.dailySeries.map { it.toDomain() },
+                )
+            },
+        )
+    }
+
+    suspend fun labCheckIn(note: String = "") {
+        client.post("$baseUrl/api/v1/analytics/lab/checkin") {
+            auth()
+            jsonBody(LabCheckNoteDto(note))
+        }.check()
+    }
+
+    suspend fun labCheckOut(note: String = "") {
+        client.post("$baseUrl/api/v1/analytics/lab/checkout") {
+            auth()
+            jsonBody(LabCheckNoteDto(note))
+        }.check()
+    }
+
+    suspend fun addLabSession(date: String, arrive: String, leave: String, note: String = "") {
+        client.post("$baseUrl/api/v1/analytics/lab/sessions") {
+            auth()
+            jsonBody(LabManualSessionRequestDto(date, arrive, leave, note))
+        }.check()
+    }
+
+    suspend fun deleteLabSession(arrive: String) {
+        client.delete("$baseUrl/api/v1/analytics/lab/sessions") {
+            auth()
+            parameter("arrive", arrive)
+        }.check()
+    }
+
+    suspend fun upsertSleepRecord(
+        date: String,
+        bedtime: String,
+        wakeTime: String,
+        durationMinutes: Int = 0,
+        score: Int? = null,
+        note: String = "",
+    ) {
+        client.post("$baseUrl/api/v1/analytics/sleep") {
+            auth()
+            jsonBody(SleepUpsertRequestDto(date, bedtime, wakeTime, durationMinutes, score, "manual", note))
+        }.check()
+    }
+
+    private fun DailyMetricPointDto.toDomain() = DailyMetricPoint(date, label, weekday, value, count)
+
+    private fun LabSessionItemDto.toDomain() = LabSessionItem(date, arrive, leave, minutes, note)
 
     private fun EntryDto.toDomain() = EntryItem(
         id = id,

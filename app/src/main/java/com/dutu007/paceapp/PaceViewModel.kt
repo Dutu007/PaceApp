@@ -9,6 +9,7 @@ import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.dutu007.paceapp.data.AnalyticsDashboard
 import com.dutu007.paceapp.data.ApiException
 import com.dutu007.paceapp.data.AppRelease
 import com.dutu007.paceapp.data.ApprovalRequest
@@ -51,7 +52,7 @@ fun appendTranscriptText(existingDraft: String, transcript: String): String {
     }
 }
 
-enum class PaceTab { CHAT, ENTRIES, DOCS }
+enum class PaceTab { CHAT, ANALYTICS, ENTRIES, DOCS }
 
 data class PaceNotice(
     val id: String = UUID.randomUUID().toString(),
@@ -75,6 +76,8 @@ data class PaceUiState(
     val activeSessionId: String? = null,
     val messages: List<ChatMessage> = emptyList(),
     val messagesLoading: Boolean = false,
+    val hasOlderMessages: Boolean = false,
+    val messageWindowLimit: Int = 80,
     val draft: String = "",
     val draftCursorTick: Int = 0,
     val streaming: Boolean = false,
@@ -104,6 +107,12 @@ data class PaceUiState(
     val docBusy: Boolean = false,
     val graph: KnowledgeGraphData? = null,
     val graphLoading: Boolean = false,
+
+    // Analytics dashboard state
+    val analytics: AnalyticsDashboard? = null,
+    val analyticsLoading: Boolean = false,
+    val analyticsRange: String = "7d",
+    val analyticsBusy: Boolean = false,
 
     // Global notice & updates
     val notice: PaceNotice? = null,
@@ -142,6 +151,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     fun selectTab(tab: PaceTab) {
         _uiState.update { it.copy(currentTab = tab) }
         when (tab) {
+            PaceTab.ANALYTICS -> refreshAnalytics()
             PaceTab.ENTRIES -> refreshEntries()
             PaceTab.DOCS -> {
                 refreshDocs()
@@ -342,6 +352,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             val online = repository.checkHermesHealth()
             _uiState.update { it.copy(hermesOnline = online) }
             loadSessionsInternal(autoSelect = true)
+            refreshAnalytics()
             refreshEntries()
             refreshDocs()
             refreshGraph()
@@ -350,7 +361,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun loadSessionsInternal(autoSelect: Boolean) {
         try {
-            val source = if (_uiState.value.sessionFilterPaceOnly) "paceapp" else null
+            val source = if (_uiState.value.sessionFilterPaceOnly) "api_server" else null
             val sessions = repository.listSessions(source = source)
             val savedId = repository.lastSessionId()
             val currentId = _uiState.value.activeSessionId
@@ -360,12 +371,13 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 autoSelect -> sessions.firstOrNull()?.id
                 else -> currentId
             }
+            val limit = if (targetId != currentId) 80 else _uiState.value.messageWindowLimit
             _uiState.update { it.copy(sessions = sessions, activeSessionId = targetId) }
             if (targetId != null) {
                 repository.saveLastSessionId(targetId)
-                loadMessagesInternal(targetId)
+                loadMessagesInternal(targetId, limit = limit)
             } else {
-                _uiState.update { it.copy(messages = emptyList()) }
+                _uiState.update { it.copy(messages = emptyList(), hasOlderMessages = false, messageWindowLimit = 80) }
             }
         } catch (e: Exception) {
             if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
@@ -378,19 +390,50 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         repository.saveLastSessionId(sessionId)
-        _uiState.update { it.copy(activeSessionId = sessionId, toolActivities = emptyList(), pendingApproval = null) }
-        viewModelScope.launch { loadMessagesInternal(sessionId) }
+        _uiState.update {
+            it.copy(
+                activeSessionId = sessionId,
+                hasOlderMessages = false,
+                messageWindowLimit = 80,
+                toolActivities = emptyList(),
+                pendingApproval = null,
+            )
+        }
+        viewModelScope.launch { loadMessagesInternal(sessionId, limit = 80) }
     }
 
-    private suspend fun loadMessagesInternal(sessionId: String) {
+    private suspend fun loadMessagesInternal(
+        sessionId: String,
+        limit: Int = _uiState.value.messageWindowLimit,
+    ) {
         _uiState.update { it.copy(messagesLoading = true) }
         try {
-            val msgs = repository.loadMessages(sessionId)
-            _uiState.update { it.copy(messagesLoading = false, messages = msgs) }
+            val page = repository.loadMessages(sessionId, limit = limit)
+            val hasOlder = limit < 500 && page.rawCount >= limit
+            _uiState.update {
+                it.copy(
+                    messagesLoading = false,
+                    messages = page.messages,
+                    hasOlderMessages = hasOlder,
+                    messageWindowLimit = limit,
+                )
+            }
         } catch (e: Exception) {
             _uiState.update { it.copy(messagesLoading = false) }
             if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
         }
+    }
+
+    fun loadOlderMessages() {
+        val sessionId = _uiState.value.activeSessionId ?: return
+        if (_uiState.value.messagesLoading) return
+        val nextLimit = (_uiState.value.messageWindowLimit + 80).coerceAtMost(500)
+        if (nextLimit == _uiState.value.messageWindowLimit) {
+            _uiState.update { it.copy(hasOlderMessages = false) }
+            showNotice("已展示最近 $nextLimit 条历史消息")
+            return
+        }
+        viewModelScope.launch { loadMessagesInternal(sessionId, limit = nextLimit) }
     }
 
     fun startNewSession() {
@@ -404,6 +447,8 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                         sessions = listOf(created) + it.sessions,
                         activeSessionId = created.id,
                         messages = emptyList(),
+                        hasOlderMessages = false,
+                        messageWindowLimit = 80,
                         toolActivities = emptyList(),
                         pendingApproval = null,
                     )
@@ -440,8 +485,19 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 val remaining = _uiState.value.sessions.filterNot { it.id == sessionId }
                 val nextActive = if (_uiState.value.activeSessionId == sessionId) remaining.firstOrNull()?.id else _uiState.value.activeSessionId
                 repository.saveLastSessionId(nextActive)
-                _uiState.update { it.copy(sessions = remaining, activeSessionId = nextActive) }
-                if (nextActive != null) loadMessagesInternal(nextActive) else _uiState.update { it.copy(messages = emptyList()) }
+                _uiState.update {
+                    it.copy(
+                        sessions = remaining,
+                        activeSessionId = nextActive,
+                        hasOlderMessages = false,
+                        messageWindowLimit = 80,
+                    )
+                }
+                if (nextActive != null) {
+                    loadMessagesInternal(nextActive, limit = 80)
+                } else {
+                    _uiState.update { it.copy(messages = emptyList()) }
+                }
             } catch (e: Exception) {
                 if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
             }
@@ -640,11 +696,12 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                         },
                     )
                 }
-                // Refresh entries & docs in case Hermes wrote something during this turn!
+                // Refresh entries, analytics & docs in case Hermes wrote something during this turn!
                 refreshEntries()
+                refreshAnalytics()
                 refreshDocs()
                 runCatching {
-                    val source = if (_uiState.value.sessionFilterPaceOnly) "paceapp" else null
+                    val source = if (_uiState.value.sessionFilterPaceOnly) "api_server" else null
                     val refreshed = repository.listSessions(source = source)
                     _uiState.update { it.copy(sessions = refreshed) }
                 }
@@ -794,6 +851,139 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 repository.deleteEntry(id)
                 _uiState.update { s -> s.copy(entries = s.entries.filterNot { it.id == id }) }
             } catch (e: Exception) {
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    // -- Analytics Dashboard --
+
+    fun refreshAnalytics(range: String = _uiState.value.analyticsRange) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(analyticsLoading = true) }
+            try {
+                val dashboard = repository.getAnalytics(range)
+                _uiState.update {
+                    it.copy(
+                        analyticsLoading = false,
+                        analyticsRange = dashboard.range,
+                        analytics = dashboard,
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(analyticsLoading = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    fun setAnalyticsRange(range: String) {
+        if (_uiState.value.analyticsRange == range && _uiState.value.analytics != null) return
+        _uiState.update { it.copy(analyticsRange = range) }
+        refreshAnalytics(range)
+    }
+
+    fun labCheckIn(note: String = "") {
+        if (_uiState.value.analyticsBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(analyticsBusy = true) }
+            try {
+                repository.labCheckIn(note)
+                val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
+                _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                showNotice("已记录到达实验室，开始计时")
+                refreshDocs()
+                refreshGraph()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(analyticsBusy = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    fun labCheckOut(note: String = "") {
+        if (_uiState.value.analyticsBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(analyticsBusy = true) }
+            try {
+                repository.labCheckOut(note)
+                val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
+                _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                val latest = refreshed.lab.recentSessions.firstOrNull { !it.leave.isNullOrBlank() }
+                val durationLabel = latest?.minutes?.let { formatDurationMinutes(it) } ?: "本次学习"
+                showNotice("已签退，$durationLabel 已计入实验室统计")
+                refreshDocs()
+                refreshGraph()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(analyticsBusy = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    fun addManualLabSession(date: String, arrive: String, leave: String, note: String = "") {
+        if (_uiState.value.analyticsBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(analyticsBusy = true) }
+            try {
+                repository.addLabSession(date = date, arrive = arrive, leave = leave, note = note)
+                val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
+                _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                showNotice("已补录实验室学习时段")
+                refreshDocs()
+                refreshGraph()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(analyticsBusy = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    fun deleteLabSession(arrive: String) {
+        if (_uiState.value.analyticsBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(analyticsBusy = true) }
+            try {
+                repository.deleteLabSession(arrive)
+                val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
+                _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                showNotice("已删除该学习记录")
+                refreshDocs()
+                refreshGraph()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(analyticsBusy = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    fun saveManualSleepRecord(
+        date: String,
+        bedtime: String,
+        wakeTime: String,
+        durationMinutes: Int = 0,
+        score: Int? = null,
+        note: String = "",
+    ) {
+        if (_uiState.value.analyticsBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(analyticsBusy = true) }
+            try {
+                repository.upsertSleepRecord(
+                    date = date,
+                    bedtime = bedtime,
+                    wakeTime = wakeTime,
+                    durationMinutes = durationMinutes,
+                    score = score,
+                    note = note,
+                )
+                val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
+                _uiState.update { it.copy(analyticsBusy = false, analytics = refreshed) }
+                showNotice("已保存 $date 睡眠记录")
+                refreshDocs()
+                refreshGraph()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(analyticsBusy = false) }
                 if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
             }
         }

@@ -85,4 +85,13 @@ class AttachmentAndDocHelperTest {
         assertEquals("第一句。第二句。", appendTranscriptText("第一句。", "第二句。"))
         assertEquals("Hermes 你好", appendTranscriptText("Hermes", "你好"))
     }
+
+    @Test
+    fun formatsDurationMinutesCleanly() {
+        assertEquals("0m", formatDurationMinutes(0))
+        assertEquals("45m", formatDurationMinutes(45))
+        assertEquals("2h", formatDurationMinutes(120))
+        assertEquals("2h 8m", formatDurationMinutes(128))
+        assertEquals("0m", formatDurationMinutes(-10))
+    }
 }

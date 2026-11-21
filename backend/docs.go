@@ -103,10 +103,17 @@ func (d *docStore) list() ([]docSummary, error) {
 			raw, _ = os.ReadFile(full)
 		}
 		title := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-		if relSlash == "images/running/notes.json" {
+		switch relSlash {
+		case "images/running/notes.json":
 			title = "跑步打卡记录"
-		} else if relSlash == "user_profile.json" {
+		case "user_profile.json":
 			title = "用户画像"
+		case "lab/sessions.json":
+			title = "实验室学习记录"
+		case "sleep/records.json":
+			title = "睡眠记录"
+		case "running/records.json":
+			title = "运动跑步记录"
 		}
 		items = append(items, docSummary{
 			Path:      relSlash,

@@ -83,6 +83,17 @@ private val ChatTabIcon = ImageVector.Builder(
     }
 }.build()
 
+private val AnalyticsTabIcon = ImageVector.Builder(
+    name = "AnalyticsTab", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
+).apply {
+    path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+        moveTo(4f, 19f); lineTo(20f, 19f)
+        moveTo(7f, 16f); lineTo(7f, 11f)
+        moveTo(12f, 16f); lineTo(12f, 6f)
+        moveTo(17f, 16f); lineTo(17f, 9f)
+    }
+}.build()
+
 private val EntriesTabIcon = ImageVector.Builder(
     name = "EntriesTab", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
 ).apply {
@@ -201,7 +212,12 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
                                             horizontalArrangement = Arrangement.spacedBy(7.dp),
                                         ) {
                                             Text(
-                                                text = if (state.currentTab == PaceTab.ENTRIES) "记录与看板" else "知识库",
+                                                text = when (state.currentTab) {
+                                                    PaceTab.ANALYTICS -> "数据分析"
+                                                    PaceTab.ENTRIES -> "记录与看板"
+                                                    PaceTab.DOCS -> "知识库"
+                                                    PaceTab.CHAT -> ""
+                                                },
                                                 fontWeight = FontWeight.Bold,
                                                 style = MaterialTheme.typography.titleSmall,
                                             )
@@ -280,6 +296,7 @@ private fun PaceAppRoot(viewModel: PaceViewModel = viewModel()) {
                             showSessionSheet = showSessionSheet,
                             onDismissSessionSheet = { showSessionSheet = false },
                         )
+                        PaceTab.ANALYTICS -> AnalyticsScreen(state = state, viewModel = viewModel)
                         PaceTab.ENTRIES -> EntriesScreen(state = state, viewModel = viewModel)
                         PaceTab.DOCS -> DocsScreen(state = state, viewModel = viewModel)
                     }
@@ -380,6 +397,7 @@ private fun PaceBottomBar(
         ) {
             val tabs = listOf(
                 Triple(PaceTab.CHAT, "对话", ChatTabIcon),
+                Triple(PaceTab.ANALYTICS, "数据", AnalyticsTabIcon),
                 Triple(PaceTab.ENTRIES, "记录", EntriesTabIcon),
                 Triple(PaceTab.DOCS, "知识库", DocsTabIcon),
             )

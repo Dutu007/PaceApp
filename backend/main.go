@@ -428,6 +428,13 @@ func (s *server) routes() http.Handler {
 	mux.Handle("GET /api/v1/graph", s.authMiddleware(http.HandlerFunc(s.getGraph)))
 	mux.Handle("POST /api/v1/uploads", s.authMiddleware(http.HandlerFunc(s.uploadFile)))
 
+	mux.Handle("GET /api/v1/analytics", s.authMiddleware(http.HandlerFunc(s.getAnalytics)))
+	mux.Handle("POST /api/v1/analytics/lab/checkin", s.authMiddleware(http.HandlerFunc(s.labCheckIn)))
+	mux.Handle("POST /api/v1/analytics/lab/checkout", s.authMiddleware(http.HandlerFunc(s.labCheckOut)))
+	mux.Handle("POST /api/v1/analytics/lab/sessions", s.authMiddleware(http.HandlerFunc(s.addLabSession)))
+	mux.Handle("DELETE /api/v1/analytics/lab/sessions", s.authMiddleware(http.HandlerFunc(s.deleteLabSession)))
+	mux.Handle("POST /api/v1/analytics/sleep", s.authMiddleware(http.HandlerFunc(s.upsertSleepRecord)))
+
 	mux.Handle("GET /api/v1/app/latest", s.authMiddleware(http.HandlerFunc(s.latestApp)))
 	mux.Handle("GET /api/v1/app/apk", s.authMiddleware(http.HandlerFunc(s.appAPK)))
 	return mux

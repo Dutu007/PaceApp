@@ -102,9 +102,14 @@ fun ChatScreen(
     var renameText by remember { mutableStateOf("") }
     var previewTarget by remember { mutableStateOf<InAppPreviewTarget?>(null) }
 
-    LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.content) {
+    LaunchedEffect(
+        state.activeSessionId,
+        state.messages.lastOrNull()?.id,
+        state.messages.lastOrNull()?.content,
+    ) {
         if (state.messages.isNotEmpty()) {
-            listState.animateScrollToItem(state.messages.lastIndex)
+            val targetIdx = state.messages.lastIndex + if (state.hasOlderMessages) 1 else 0
+            listState.animateScrollToItem(targetIdx.coerceAtLeast(0))
         }
     }
 
@@ -185,6 +190,43 @@ fun ChatScreen(
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
+                        if (state.hasOlderMessages) {
+                            item(key = "load_older_header") {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = PacePalette.Card,
+                                        border = BorderStroke(1.dp, PacePalette.CardBorder),
+                                        onClick = { if (!state.messagesLoading) viewModel.loadOlderMessages() },
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        ) {
+                                            if (state.messagesLoading) {
+                                                CircularProgressIndicator(modifier = Modifier.size(13.dp), strokeWidth = 1.8.dp)
+                                                Text(
+                                                    "正在加载更早消息...",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = PacePalette.TextSecondary,
+                                                )
+                                            } else {
+                                                Text(
+                                                    "加载更早消息（当前展示最近 ${state.messages.size} 条）",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = PacePalette.Primary,
+                                                    fontWeight = FontWeight.Medium,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         items(state.messages, key = { it.id }) { msg ->
                             MessageItem(
                                 message = msg,
@@ -250,12 +292,19 @@ fun ChatScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text("对话列表", style = MaterialTheme.typography.titleMedium)
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("对话列表", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "保留上下文并在下次打开时自动续接；长历史支持窗口加载与压缩",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PacePalette.TextSecondary,
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         FilterChip(
                             selected = state.sessionFilterPaceOnly,
                             onClick = viewModel::toggleSessionFilter,
-                            label = { Text(if (state.sessionFilterPaceOnly) "仅 Pace" else "全部来源") },
+                            label = { Text(if (state.sessionFilterPaceOnly) "仅应用对话" else "全部来源") },
                         )
                         Button(
                             onClick = {
@@ -303,8 +352,12 @@ fun ChatScreen(
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
+                                        val sourceLabel = when (session.source) {
+                                            "api_server", "paceapp" -> "PaceApp"
+                                            else -> session.source.ifBlank { "hermes" }
+                                        }
                                         Text(
-                                            "${session.source.ifBlank { "hermes" }} · ${session.messageCount} 条消息",
+                                            "$sourceLabel · ${session.messageCount} 条消息",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = PacePalette.TextSecondary,
                                         )

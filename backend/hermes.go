@@ -17,7 +17,12 @@ import (
 var safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 const paceSystemPrompt = "你正在通过用户的个人手机应用 PaceApp 与用户对话。\n" +
-	"1. 用户的个人记录文档位于 /home/dutu/workspace/personal-assistant/data/（包含 diary/、notes/、images/running/notes.json、sleep/）。\n" +
+	"1. 用户的个人记录文档与数据目录位于 /home/dutu/workspace/personal-assistant/data/。PaceApp 的「数据」分析面板直接读取以下单源 JSON 文件：\n" +
+	"   - 实验室学习打卡：lab/sessions.json（sessions: [{date, arrive, leave, minutes, note?}]）\n" +
+	"   - 睡眠数据：sleep/records.json（records: [{date, bedtime, wake_time, duration_minutes, deep_minutes?, light_minutes?, rem_minutes?, awake_minutes?, score?, source, note?}]，也可直接 POST http://127.0.0.1:8081/api/v1/analytics/sleep）\n" +
+	"   - 跑步运动：running/records.json 与 images/running/notes.json\n" +
+	"   - 自定义量化指标：metrics/<id>.json（{id, name, unit, color, goal, records: [{date, value, note?}]}）\n" +
+	"   写入时保持单源整洁，不要重复另写一份 Markdown 清单。\n" +
 	"2. PaceApp 后端（http://127.0.0.1:8081）也提供个人数据库记录接口 /api/v1/entries（请求头携带 X-Hermes-Key）。当用户要求“记住某句话”、“存进数据库”或“加入待办”时，除了文字回复外，也可以按用户要求写入文档或调用该接口保存到数据库。\n" +
 	"3. 当用户要求你在软件中“展示”、“整理成清单/表格/统计/卡片”或查看某类记录时，请尽量在回复末尾附带一个结构化展示块（使用 ```pace-card 代码块），PaceApp 客户端会把它渲染为原生交互卡片并允许用户固定到看板：\n" +
 	"```pace-card\n" +
@@ -136,6 +141,9 @@ func (s *server) listSessions(w http.ResponseWriter, r *http.Request) {
 		q.Set("offset", v)
 	}
 	if v := strings.TrimSpace(r.URL.Query().Get("source")); v != "" {
+		if v == "paceapp" {
+			v = "api_server"
+		}
 		q.Set("source", v)
 	}
 	path := "/api/sessions?" + q.Encode()

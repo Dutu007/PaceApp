@@ -159,6 +159,130 @@ data class KnowledgeGraphData(
     val stats: GraphStatsItem = GraphStatsItem(),
 )
 
+data class MessagePage(
+    val messages: List<ChatMessage>,
+    val rawCount: Int,
+)
+
+data class DailyMetricPoint(
+    val date: String,
+    val label: String,
+    val weekday: String,
+    val value: Double,
+    val count: Int = 0,
+)
+
+data class LabSessionItem(
+    val date: String,
+    val arrive: String,
+    val leave: String? = null,
+    val minutes: Int? = null,
+    val note: String = "",
+)
+
+data class LabAnalytics(
+    val activeSession: LabSessionItem? = null,
+    val activeElapsedMinutes: Int = 0,
+    val todayMinutes: Int = 0,
+    val weekMinutes: Int = 0,
+    val monthMinutes: Int = 0,
+    val totalMinutes: Int = 0,
+    val sessionCount: Int = 0,
+    val avgDailyMinutes: Int = 0,
+    val streakDays: Int = 0,
+    val dailySeries: List<DailyMetricPoint> = emptyList(),
+    val recentSessions: List<LabSessionItem> = emptyList(),
+)
+
+data class SleepDailyPoint(
+    val date: String,
+    val label: String,
+    val weekday: String,
+    val durationMinutes: Int = 0,
+    val deepMinutes: Int? = null,
+    val lightMinutes: Int? = null,
+    val remMinutes: Int? = null,
+    val score: Int? = null,
+    val bedtime: String = "",
+    val wakeTime: String = "",
+)
+
+data class SleepRecordItem(
+    val date: String,
+    val bedtime: String = "",
+    val wakeTime: String = "",
+    val durationMinutes: Int = 0,
+    val deepMinutes: Int? = null,
+    val lightMinutes: Int? = null,
+    val remMinutes: Int? = null,
+    val awakeMinutes: Int? = null,
+    val score: Int? = null,
+    val source: String = "",
+    val note: String = "",
+)
+
+data class SleepAnalytics(
+    val hasData: Boolean = false,
+    val avgDurationMinutes: Int = 0,
+    val latestDurationMinutes: Int = 0,
+    val avgScore: Int? = null,
+    val recordCount: Int = 0,
+    val dailySeries: List<SleepDailyPoint> = emptyList(),
+    val recentRecords: List<SleepRecordItem> = emptyList(),
+)
+
+data class RunningRecordItem(
+    val date: String,
+    val distanceKm: Double = 0.0,
+    val durationMinutes: Int = 0,
+    val pace: String = "",
+    val source: String = "",
+    val note: String = "",
+    val imagePath: String = "",
+)
+
+data class RunningAnalytics(
+    val totalRuns: Int = 0,
+    val runsInRange: Int = 0,
+    val totalDistanceKm: Double = 0.0,
+    val dailySeries: List<DailyMetricPoint> = emptyList(),
+    val recentRuns: List<RunningRecordItem> = emptyList(),
+)
+
+data class CustomMetricSummary(
+    val id: String,
+    val name: String,
+    val unit: String = "",
+    val colorHex: String = "#0E5A6F",
+    val goal: Double = 0.0,
+    val latestValue: Double = 0.0,
+    val avgValue: Double = 0.0,
+    val dailySeries: List<DailyMetricPoint> = emptyList(),
+)
+
+data class AnalyticsOverview(
+    val todayLabMinutes: Int = 0,
+    val weekLabMinutes: Int = 0,
+    val totalLabMinutes: Int = 0,
+    val labActive: Boolean = false,
+    val avgSleepMinutes: Int = 0,
+    val latestSleepMinutes: Int = 0,
+    val sleepHasData: Boolean = false,
+    val runningCount30d: Int = 0,
+    val runningTotalCount: Int = 0,
+    val labStreakDays: Int = 0,
+)
+
+data class AnalyticsDashboard(
+    val generatedAt: String = "",
+    val range: String = "7d",
+    val overview: AnalyticsOverview = AnalyticsOverview(),
+    val lab: LabAnalytics = LabAnalytics(),
+    val sleep: SleepAnalytics = SleepAnalytics(),
+    val running: RunningAnalytics = RunningAnalytics(),
+    val customMetrics: List<CustomMetricSummary> = emptyList(),
+)
+
 sealed interface ChatStreamEvent {
     data class RunStarted(val runId: String?) : ChatStreamEvent
     data class AssistantDelta(val messageId: String, val delta: String) : ChatStreamEvent
