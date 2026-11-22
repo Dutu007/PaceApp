@@ -8,7 +8,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -67,13 +69,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -161,15 +166,7 @@ fun ChatScreen(
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Surface(
-                                        color = PacePalette.Primary,
-                                        shape = CircleShape,
-                                        modifier = Modifier.size(34.dp),
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text("洛", color = Color.White, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
+                                    XiaoluoAvatar(size = 40.dp)
                                     Column {
                                         Text("你好，我是小洛", style = MaterialTheme.typography.titleMedium, color = PacePalette.TextPrimary)
                                         Text("知识库管理 · 运动与作息分析 · 智能卡片", style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary)
@@ -1141,15 +1138,7 @@ private fun MessageItem(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(PacePalette.Primary),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("洛", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-            }
+            XiaoluoAvatar(size = 24.dp)
             Text("小洛", style = MaterialTheme.typography.labelMedium, color = PacePalette.TextSecondary, fontWeight = FontWeight.SemiBold)
             if (message.isProactive) {
                 Surface(
@@ -1271,4 +1260,17 @@ private fun ApprovalCard(approval: ApprovalRequest, onChoice: (String) -> Unit) 
             }
         }
     }
+}
+
+@Composable
+private fun XiaoluoAvatar(size: Dp) {
+    Image(
+        painter = painterResource(id = R.drawable.xiaoluo_avatar),
+        contentDescription = "小洛",
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .border(0.5.dp, PacePalette.CardBorder, CircleShape),
+    )
 }

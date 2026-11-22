@@ -1,7 +1,9 @@
 package com.dutu007.paceapp
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,8 +28,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -67,15 +72,15 @@ fun LoginScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Surface(
-                        color = PacePalette.Primary,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.size(40.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text("P", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
-                        }
-                    }
+                    Image(
+                        painter = painterResource(id = R.drawable.xiaoluo_avatar),
+                        contentDescription = "小洛",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(0.5.dp, PacePalette.CardBorder, RoundedCornerShape(12.dp)),
+                    )
                     Column {
                         Text("Pace", style = MaterialTheme.typography.titleLarge, color = PacePalette.TextPrimary)
                         Text("小洛对话 · 随手记 · 同步文档", style = MaterialTheme.typography.bodySmall, color = PacePalette.TextSecondary)
