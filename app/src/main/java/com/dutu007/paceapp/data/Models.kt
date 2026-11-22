@@ -298,3 +298,20 @@ sealed interface ChatStreamEvent {
     data class Error(val message: String) : ChatStreamEvent
     data object Done : ChatStreamEvent
 }
+
+data class PushNotificationItem(
+    val id: Long,
+    val title: String,
+    val body: String,
+    val category: String = "reminder",
+    val sessionId: String = "",
+    val source: String = "hermes",
+    val isRead: Boolean = false,
+    val createdAt: String = "",
+)
+
+data class NotificationPage(
+    val items: List<PushNotificationItem> = emptyList(),
+    val unreadCount: Long = 0L,
+    val latestId: Long = 0L,
+)

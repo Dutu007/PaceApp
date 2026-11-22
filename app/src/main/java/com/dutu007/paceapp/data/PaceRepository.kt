@@ -222,6 +222,25 @@ private data class ApprovalSubmitDto(val choice: String)
 private data class SteerRunRequestDto(val input: String)
 
 @Serializable
+private data class PushNotificationDto(
+    val id: Long = 0L,
+    val title: String = "",
+    val body: String = "",
+    val category: String = "reminder",
+    @SerialName("session_id") val sessionId: String = "",
+    val source: String = "hermes",
+    @SerialName("is_read") val isRead: Boolean = false,
+    @SerialName("created_at") val createdAt: String = "",
+)
+
+@Serializable
+private data class NotificationPageDto(
+    val items: List<PushNotificationDto> = emptyList(),
+    @SerialName("unread_count") val unreadCount: Long = 0L,
+    @SerialName("latest_id") val latestId: Long = 0L,
+)
+
+@Serializable
 private data class SttRefineRequestDto(
     val text: String,
     val candidates: List<String> = emptyList(),
@@ -405,6 +424,7 @@ class PaceRepository(context: Context) {
     private val baseUrl = BuildConfig.API_BASE_URL.trimEnd('/')
 
     fun hasSession(): Boolean = !preferences.getString("token", null).isNullOrBlank()
+    fun authToken(): String = preferences.getString("token", "").orEmpty()
     fun currentUser(): UserProfile? {
         val username = preferences.getString("username", null) ?: return null
         val display = preferences.getString("display_name", null) ?: username
@@ -1007,6 +1027,48 @@ class PaceRepository(context: Context) {
             jsonBody(SleepUpsertRequestDto(date, bedtime, wakeTime, durationMinutes, score, "manual", note))
         }.check()
     }
+
+    suspend fun listNotifications(
+        limit: Int = 50,
+        unreadOnly: Boolean = false,
+        afterId: Long = 0L,
+    ): NotificationPage {
+        val dto = client.get("$baseUrl/api/v1/notifications") {
+            auth()
+            parameter("limit", limit)
+            if (unreadOnly) parameter("unread_only", "1")
+            if (afterId > 0L) parameter("after_id", afterId)
+        }.bodyChecked<NotificationPageDto>()
+        return NotificationPage(
+            items = dto.items.map { it.toDomain() },
+            unreadCount = dto.unreadCount,
+            latestId = dto.latestId,
+        )
+    }
+
+    suspend fun markNotificationRead(id: Long) {
+        client.post("$baseUrl/api/v1/notifications/$id/read") { auth() }.check()
+    }
+
+    suspend fun markAllNotificationsRead() {
+        client.post("$baseUrl/api/v1/notifications/read-all") { auth() }.check()
+    }
+
+    suspend fun sendTestNotification(): PushNotificationItem {
+        val dto = client.post("$baseUrl/api/v1/push/test") { auth() }.bodyChecked<PushNotificationDto>()
+        return dto.toDomain()
+    }
+
+    private fun PushNotificationDto.toDomain() = PushNotificationItem(
+        id = id,
+        title = title,
+        body = body,
+        category = category,
+        sessionId = sessionId,
+        source = source,
+        isRead = isRead,
+        createdAt = createdAt,
+    )
 
     private fun DailyMetricPointDto.toDomain() = DailyMetricPoint(date, label, weekday, value, count)
 

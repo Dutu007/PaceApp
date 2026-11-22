@@ -1,5 +1,17 @@
 package com.dutu007.paceapp
 
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
+import com.dutu007.paceapp.push.PaceNotificationHelper
+import com.dutu007.paceapp.push.PushConnectionState
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -246,6 +258,22 @@ val FileDocIcon = ImageVector.Builder(
     }
 }.build()
 
+private fun openAppNotificationSettings(context: android.content.Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }.onFailure {
+        val fallback = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", context.packageName, null),
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(fallback) }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -259,12 +287,24 @@ fun SettingsScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     var ignoringBattery by remember { mutableStateOf(OriginOsKeepAliveHelper.isIgnoringBatteryOptimizations(context)) }
     var lastWidgetSync by remember(state.analytics) { mutableStateOf(WidgetDataStore.lastSyncFormatted(context)) }
+    var hasNotifPermission by remember { mutableStateOf(PaceNotificationHelper.hasNotificationPermission(context)) }
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        hasNotifPermission = granted || PaceNotificationHelper.hasNotificationPermission(context)
+        if (granted) {
+            PaceNotificationHelper.ensureChannels(context)
+        } else if (!hasNotifPermission) {
+            openAppNotificationSettings(context)
+        }
+    }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 ignoringBattery = OriginOsKeepAliveHelper.isIgnoringBatteryOptimizations(context)
                 lastWidgetSync = WidgetDataStore.lastSyncFormatted(context)
+                hasNotifPermission = PaceNotificationHelper.hasNotificationPermission(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -355,6 +395,133 @@ fun SettingsScreen(
                     )
                 }
 
+                item {
+                    Text(
+                        text = "主动提醒与实时通知",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+                    )
+                }
+                item {
+                    val connSummary = when (state.pushConnectionState) {
+                        PushConnectionState.CONNECTED -> "已在线 · 保持长连接可秒级接收主动提醒"
+                        PushConnectionState.CONNECTING -> "连接中... · 正在建立 SSE 推送通道"
+                        PushConnectionState.DISCONNECTED -> "已断开 · 网络恢复后自动重连"
+                        PushConnectionState.DISABLED -> "已关闭 · 仅通过后台周期同步拉取提醒"
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (!hasNotifPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        } else {
+                                            openAppNotificationSettings(context)
+                                        }
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = "通知权限",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = if (hasNotifPermission) {
+                                            "已授权 · 点击可调整系统通知渠道"
+                                        } else {
+                                            "未授权 · 点击开启以接收 Hermes 提醒弹窗"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Text(
+                                    text = if (hasNotifPermission) "已开启" else "去授权",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = "Hermes 随时在线长连接（方案 A）",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = connSummary,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Switch(
+                                    checked = state.livePushEnabled,
+                                    onCheckedChange = viewModel::toggleLivePush,
+                                )
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.sendTestPush() }
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = "发送测试通知",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = "验证服务器推送通道与手机端实时弹窗提醒",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Text(
+                                    text = "测试",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
                 item {
                     Text(
                         text = "桌面组件与后台保活",

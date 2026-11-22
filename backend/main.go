@@ -29,13 +29,15 @@ var migrationFiles embed.FS
 var migrationNumberPattern = regexp.MustCompile(`^(\d+)`)
 
 type server struct {
-	auth    authConfig
-	hermes  *hermesClient
-	llm     *llmClient
-	stt     *sttClient
-	entries entryStore
-	docs    *docStore
-	apkDir  string
+	auth          authConfig
+	hermes        *hermesClient
+	llm           *llmClient
+	stt           *sttClient
+	entries       entryStore
+	notifications notificationStore
+	notifHub      *notificationHub
+	docs          *docStore
+	apkDir        string
 }
 
 type loginRequest struct {
@@ -260,6 +262,7 @@ func main() {
 	}
 
 	var entries entryStore
+	var notifications notificationStore
 	dsn := buildDSN()
 	if dsn != "" {
 		pool, err := pgxpool.New(ctx, dsn)
@@ -274,8 +277,9 @@ func main() {
 			log.Fatal(err)
 		}
 		entries = &poolStore{pool: pool}
+		notifications = &pgNotificationStore{pool: pool}
 	} else {
-		log.Printf("WARNING: DATABASE_* not set; entries endpoints will return 503")
+		log.Printf("WARNING: DATABASE_* not set; entries & notifications endpoints will return 503")
 	}
 
 	apkDir := os.Getenv("APP_RELEASE_DIR")
@@ -284,13 +288,15 @@ func main() {
 	}
 
 	s := &server{
-		auth:    auth,
-		hermes:  newHermesClient(hermesBase, hermesKey),
-		llm:     newLLMClient(os.Getenv("DEEPSEEK_BASE_URL"), os.Getenv("DEEPSEEK_API_KEY"), os.Getenv("STT_REFINE_MODEL")),
-		stt:     newSTTClient(os.Getenv("SILICONFLOW_BASE_URL"), os.Getenv("SILICONFLOW_API_KEY"), os.Getenv("STT_ASR_MODEL")),
-		entries: entries,
-		docs:    newDocStore(os.Getenv("ASSISTANT_DATA_DIR"), os.Getenv("HERMES_MEMORY_FILE")),
-		apkDir:  apkDir,
+		auth:          auth,
+		hermes:        newHermesClient(hermesBase, hermesKey),
+		llm:           newLLMClient(os.Getenv("DEEPSEEK_BASE_URL"), os.Getenv("DEEPSEEK_API_KEY"), os.Getenv("STT_REFINE_MODEL")),
+		stt:           newSTTClient(os.Getenv("SILICONFLOW_BASE_URL"), os.Getenv("SILICONFLOW_API_KEY"), os.Getenv("STT_ASR_MODEL")),
+		entries:       entries,
+		notifications: notifications,
+		notifHub:      newNotificationHub(),
+		docs:          newDocStore(os.Getenv("ASSISTANT_DATA_DIR"), os.Getenv("HERMES_MEMORY_FILE")),
+		apkDir:        apkDir,
 	}
 
 	addr := os.Getenv("LISTEN_ADDR")
@@ -435,6 +441,13 @@ func (s *server) routes() http.Handler {
 	mux.Handle("POST /api/v1/analytics/lab/sessions", s.authMiddleware(http.HandlerFunc(s.addLabSession)))
 	mux.Handle("DELETE /api/v1/analytics/lab/sessions", s.authMiddleware(http.HandlerFunc(s.deleteLabSession)))
 	mux.Handle("POST /api/v1/analytics/sleep", s.authMiddleware(http.HandlerFunc(s.upsertSleepRecord)))
+
+	mux.Handle("POST /api/v1/push/notify", s.authMiddleware(http.HandlerFunc(s.pushNotify)))
+	mux.Handle("POST /api/v1/push/test", s.authMiddleware(http.HandlerFunc(s.pushTest)))
+	mux.Handle("GET /api/v1/notifications", s.authMiddleware(http.HandlerFunc(s.listNotifications)))
+	mux.Handle("POST /api/v1/notifications/{id}/read", s.authMiddleware(http.HandlerFunc(s.markNotificationRead)))
+	mux.Handle("POST /api/v1/notifications/read-all", s.authMiddleware(http.HandlerFunc(s.markAllNotificationsRead)))
+	mux.Handle("GET /api/v1/events/stream", s.authMiddleware(http.HandlerFunc(s.eventsStream)))
 
 	mux.Handle("GET /api/v1/app/latest", s.authMiddleware(http.HandlerFunc(s.latestApp)))
 	mux.Handle("GET /api/v1/app/apk", s.authMiddleware(http.HandlerFunc(s.appAPK)))

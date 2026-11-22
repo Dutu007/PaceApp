@@ -1,11 +1,18 @@
 package com.dutu007.paceapp
 
+import com.dutu007.paceapp.push.parseConnectedLatestId
+import com.dutu007.paceapp.push.parsePushSseNotification
 import com.dutu007.paceapp.widget.computeNormalizedBarRatios
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class AttachmentAndDocHelperTest {
     @Test
@@ -176,5 +183,80 @@ class AttachmentAndDocHelperTest {
         assertTrue(((deepBar.fillArgb ushr 24) and 0xFF) > ((lightBar.fillArgb ushr 24) and 0xFF))
         assertTrue(((lightBar.fillArgb shr 16) and 0xFF) > ((midBar.fillArgb shr 16) and 0xFF))
         assertTrue(((midBar.fillArgb shr 16) and 0xFF) > ((deepBar.fillArgb shr 16) and 0xFF))
+    }
+
+    @Test
+    fun parsesDocxParagraphsTablesAndEmbeddedImages() {
+        val baos = ByteArrayOutputStream()
+        ZipOutputStream(baos).use { zos ->
+            zos.putNextEntry(ZipEntry("word/_rels/document.xml.rels"))
+            zos.write(
+                """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
+                </Relationships>
+                """.trimIndent().toByteArray(Charsets.UTF_8),
+            )
+            zos.closeEntry()
+
+            zos.putNextEntry(ZipEntry("word/document.xml"))
+            zos.write(
+                """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <w:body>
+                    <w:p>
+                      <w:pPr><w:pStyle w:val="Heading1"/></w:pPr>
+                      <w:r><w:t>周报汇总</w:t></w:r>
+                    </w:p>
+                    <w:p>
+                      <w:r><w:t>配图如下：</w:t></w:r>
+                      <w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r>
+                    </w:p>
+                    <w:tbl>
+                      <w:tr>
+                        <w:tc><w:p><w:r><w:t>项目</w:t></w:r></w:p></w:tc>
+                        <w:tc><w:p><w:r><w:t>数值</w:t></w:r></w:p></w:tc>
+                      </w:tr>
+                      <w:tr>
+                        <w:tc><w:p><w:r><w:t>睡眠</w:t></w:r></w:p></w:tc>
+                        <w:tc><w:p><w:r><w:t>8h 03m</w:t></w:r></w:p></w:tc>
+                      </w:tr>
+                    </w:tbl>
+                  </w:body>
+                </w:document>
+                """.trimIndent().toByteArray(Charsets.UTF_8),
+            )
+            zos.closeEntry()
+
+            zos.putNextEntry(ZipEntry("word/media/image1.png"))
+            zos.write(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47))
+            zos.closeEntry()
+        }
+
+        val blocks = parseDocxBlocks(ByteArrayInputStream(baos.toByteArray()))
+        assertEquals(4, blocks.size)
+        assertTrue(blocks[0] is DocxBlock.Heading)
+        assertEquals("周报汇总", (blocks[0] as DocxBlock.Heading).text)
+        assertEquals("配图如下：", (blocks[1] as DocxBlock.Paragraph).text)
+        assertEquals("word/media/image1.png", (blocks[2] as DocxBlock.EmbeddedImage).entryPath)
+        assertEquals(listOf("睡眠", "8h 03m"), (blocks[3] as DocxBlock.Table).rows[1])
+        assertTrue(docxPlainText(blocks).contains("周报汇总"))
+    }
+
+    @Test
+    fun parsesPushSseNotificationJson() {
+        val item = parsePushSseNotification(
+            """{"id":12,"title":"COROS 每日同步","body":"昨晚睡了 8 小时","category":"coros","is_read":false}""",
+        )
+        assertNotNull(item)
+        assertEquals(12L, item!!.id)
+        assertEquals("COROS 每日同步", item.title)
+        assertEquals("coros", item.category)
+        assertEquals(42L, parseConnectedLatestId("""{"status":"ok","latest_id":42,"unread_count":1}"""))
+        assertNull(parsePushSseNotification("""{"id":0,"body":"invalid"}"""))
     }
 }

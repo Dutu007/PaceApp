@@ -1,14 +1,18 @@
 package com.dutu007.paceapp
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,6 +32,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -39,10 +46,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,12 +71,17 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.dutu007.paceapp.data.PushNotificationItem
+import com.dutu007.paceapp.push.PaceNotificationHelper
+import com.dutu007.paceapp.push.PacePushPrefs
+import com.dutu007.paceapp.push.PushConnectionState
 import com.dutu007.paceapp.ui.theme.PacePalette
 import com.dutu007.paceapp.ui.theme.PaceTheme
 import kotlinx.coroutines.delay
@@ -99,12 +114,33 @@ private val DocsTabIcon = ImageVector.Builder(
     }
 }.build()
 
+private val BellIcon = ImageVector.Builder(
+    name = "Bell", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
+).apply {
+    path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+        moveTo(18f, 8f)
+        curveTo(18f, 4.7f, 15.3f, 2f, 12f, 2f)
+        curveTo(8.7f, 2f, 6f, 4.7f, 6f, 8f)
+        curveTo(6f, 15f, 3f, 17f, 3f, 17f)
+        lineTo(21f, 17f)
+        curveTo(21f, 17f, 18f, 15f, 18f, 8f)
+        close()
+    }
+    path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+        moveTo(13.73f, 21f)
+        curveTo(13.38f, 21.6f, 12.73f, 22f, 12f, 22f)
+        curveTo(11.27f, 22f, 10.62f, 21.6f, 10.27f, 21f)
+    }
+}.build()
+
 class MainActivity : ComponentActivity() {
     private var pendingOpenTab by mutableStateOf<String?>(null)
+    private var pendingNotificationId by mutableStateOf(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingOpenTab = intent?.getStringExtra(EXTRA_OPEN_TAB)
+        pendingNotificationId = intent?.getLongExtra(EXTRA_OPEN_NOTIFICATION_ID, 0L) ?: 0L
         val transparent = Color.Transparent.toArgb()
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.light(transparent, transparent),
@@ -115,6 +151,8 @@ class MainActivity : ComponentActivity() {
                 PaceAppRoot(
                     pendingOpenTab = pendingOpenTab,
                     onConsumePendingTab = { pendingOpenTab = null },
+                    pendingNotificationId = pendingNotificationId,
+                    onConsumePendingNotification = { pendingNotificationId = 0L },
                 )
             }
         }
@@ -124,10 +162,12 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         pendingOpenTab = intent.getStringExtra(EXTRA_OPEN_TAB)
+        pendingNotificationId = intent.getLongExtra(EXTRA_OPEN_NOTIFICATION_ID, 0L)
     }
 
     companion object {
         const val EXTRA_OPEN_TAB = "pace_open_tab"
+        const val EXTRA_OPEN_NOTIFICATION_ID = "pace_open_notification_id"
     }
 }
 
@@ -137,18 +177,47 @@ private fun PaceAppRoot(
     viewModel: PaceViewModel = viewModel(),
     pendingOpenTab: String? = null,
     onConsumePendingTab: () -> Unit = {},
+    pendingNotificationId: Long = 0L,
+    onConsumePendingNotification: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
     var showSessionSheet by remember { mutableStateOf(false) }
+    var showNotificationsSheet by remember { mutableStateOf(false) }
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            PaceNotificationHelper.ensureChannels(context)
+        }
+    }
+
+    LaunchedEffect(state.authenticated) {
+        if (state.authenticated &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !PaceNotificationHelper.hasNotificationPermission(context) &&
+            !PacePushPrefs.hasAskedPermission(context)
+        ) {
+            PacePushPrefs.markPermissionAsked(context)
+            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     LaunchedEffect(pendingOpenTab, state.authenticated) {
         if (state.authenticated && !pendingOpenTab.isNullOrBlank()) {
-            if (pendingOpenTab == "ANALYTICS") {
-                viewModel.selectTab(PaceTab.ANALYTICS)
+            when (pendingOpenTab) {
+                "ANALYTICS" -> viewModel.selectTab(PaceTab.ANALYTICS)
+                "CHAT" -> viewModel.selectTab(PaceTab.CHAT)
             }
             onConsumePendingTab()
+        }
+    }
+
+    LaunchedEffect(pendingNotificationId, state.authenticated) {
+        if (state.authenticated && pendingNotificationId > 0L) {
+            viewModel.openNotificationById(pendingNotificationId)
+            onConsumePendingNotification()
         }
     }
 
@@ -260,6 +329,32 @@ private fun PaceAppRoot(
                                             Icon(RefreshIcon, contentDescription = "刷新", tint = PacePalette.Primary, modifier = Modifier.size(19.dp))
                                         }
                                     }
+                                    Box {
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.refreshNotifications()
+                                                showNotificationsSheet = true
+                                            },
+                                            modifier = Modifier.size(34.dp),
+                                        ) {
+                                            Icon(
+                                                BellIcon,
+                                                contentDescription = "通知收件箱",
+                                                tint = PacePalette.Primary,
+                                                modifier = Modifier.size(19.dp),
+                                            )
+                                        }
+                                        if (state.unreadNotificationCount > 0L) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(top = 5.dp, end = 5.dp)
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(MaterialTheme.colorScheme.error),
+                                            )
+                                        }
+                                    }
                                     IconButton(
                                         onClick = { showSettings = true },
                                         modifier = Modifier.size(34.dp),
@@ -329,6 +424,23 @@ private fun PaceAppRoot(
                     state = state,
                     viewModel = viewModel,
                     onBack = { showSettings = false },
+                )
+            }
+            if (showNotificationsSheet) {
+                NotificationsSheet(
+                    state = state,
+                    onDismiss = { showNotificationsSheet = false },
+                    onRefresh = viewModel::refreshNotifications,
+                    onMarkAllRead = viewModel::markAllNotificationsRead,
+                    onOpenNotification = { item ->
+                        showNotificationsSheet = false
+                        viewModel.openNotificationById(item.id)
+                    },
+                    onMarkRead = viewModel::markNotificationRead,
+                    onReply = { item ->
+                        showNotificationsSheet = false
+                        viewModel.replyToNotification(item)
+                    },
                 )
             }
         }
@@ -438,6 +550,208 @@ private fun PaceBottomBar(
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         color = tint,
                     )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NotificationsSheet(
+    state: PaceUiState,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onMarkAllRead: () -> Unit,
+    onOpenNotification: (PushNotificationItem) -> Unit,
+    onMarkRead: (Long) -> Unit,
+    onReply: (PushNotificationItem) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val (connLabel, connBg, connFg) = when (state.pushConnectionState) {
+        PushConnectionState.CONNECTED -> Triple("实时在线", PacePalette.SuccessSoft, PacePalette.Success)
+        PushConnectionState.CONNECTING -> Triple("连接中...", PacePalette.AccentAmberSoft, PacePalette.AccentAmber)
+        PushConnectionState.DISCONNECTED -> Triple("连接暂断", MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.error)
+        PushConnectionState.DISABLED -> Triple("已关闭", PacePalette.Muted, PacePalette.TextSecondary)
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = PacePalette.Card,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "通知收件箱",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = PacePalette.TextPrimary,
+                    )
+                    Surface(
+                        color = connBg,
+                        shape = CircleShape,
+                    ) {
+                        Text(
+                            text = connLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = connFg,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    TextButton(
+                        onClick = onMarkAllRead,
+                        enabled = state.unreadNotificationCount > 0L,
+                    ) {
+                        Text("全部已读", fontSize = 13.sp)
+                    }
+                    TextButton(onClick = onRefresh) {
+                        Text("刷新", fontSize = 13.sp)
+                    }
+                }
+            }
+
+            if (state.notificationsLoading && state.notifications.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 2.5.dp)
+                }
+            } else if (state.notifications.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "暂无 Hermes 主动提醒\n可在对话中让 Hermes 定时或按规则提醒你",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = PacePalette.TextSecondary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(380.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(state.notifications, key = { it.id }) { item ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenNotification(item) },
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (item.isRead) PacePalette.Background else PacePalette.PrimarySoft.copy(alpha = 0.45f),
+                            border = BorderStroke(
+                                1.dp,
+                                if (item.isRead) PacePalette.CardBorder else PacePalette.Primary.copy(alpha = 0.25f),
+                            ),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        if (!item.isRead) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(7.dp)
+                                                    .clip(CircleShape)
+                                                    .background(PacePalette.Primary),
+                                            )
+                                        }
+                                        Surface(
+                                            color = PacePalette.Muted,
+                                            shape = RoundedCornerShape(6.dp),
+                                        ) {
+                                            Text(
+                                                text = item.category.ifBlank { "reminder" },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = PacePalette.TextSecondary,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = item.createdAt.take(16).replace("T", " "),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = PacePalette.TextSecondary,
+                                    )
+                                }
+                                Text(
+                                    text = item.title.ifBlank { "Hermes 提醒" },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = PacePalette.TextPrimary,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (item.body.isNotBlank()) {
+                                    Text(
+                                        text = item.body,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = PacePalette.TextSecondary,
+                                        maxLines = 4,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    if (!item.isRead) {
+                                        TextButton(
+                                            onClick = { onMarkRead(item.id) },
+                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                                            modifier = Modifier.height(32.dp),
+                                        ) {
+                                            Text("已读", fontSize = 12.sp)
+                                        }
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onReply(item) },
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                        modifier = Modifier.height(32.dp),
+                                    ) {
+                                        Text("回复", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

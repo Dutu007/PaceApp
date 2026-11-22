@@ -16,6 +16,9 @@ import androidx.work.workDataOf
 import com.dutu007.paceapp.data.AnalyticsDashboard
 import com.dutu007.paceapp.data.ApiException
 import com.dutu007.paceapp.data.PaceRepository
+import com.dutu007.paceapp.push.PaceNotificationHelper
+import com.dutu007.paceapp.push.PacePushPrefs
+import com.dutu007.paceapp.push.PacePushService
 import java.util.concurrent.TimeUnit
 
 class WidgetSyncWorker(
@@ -45,6 +48,16 @@ class WidgetSyncWorker(
             val dashboard = repo.getAnalytics("7d")
             WidgetDataStore.saveDashboard(applicationContext, dashboard)
             PaceWidgetUpdater.updateAllWidgets(applicationContext)
+            runCatching {
+                val afterId = PacePushPrefs.lastSeenId(applicationContext)
+                if (afterId > 0L) {
+                    val missed = repo.listNotifications(limit = 20, unreadOnly = true, afterId = afterId)
+                    missed.items.forEach { item ->
+                        PaceNotificationHelper.showAlertNotification(applicationContext, item)
+                    }
+                }
+            }
+            PacePushService.syncServiceState(applicationContext)
             Result.success()
         } catch (e: ApiException) {
             if (e.statusCode == 401) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -94,6 +95,106 @@ func (m *memoryEntryStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+type memoryNotificationStore struct {
+	mu     sync.Mutex
+	nextID int64
+	items  []pushNotification
+}
+
+func newMemoryNotificationStore() *memoryNotificationStore {
+	return &memoryNotificationStore{items: make([]pushNotification, 0)}
+}
+
+func (m *memoryNotificationStore) Create(_ context.Context, req createNotificationRequest) (pushNotification, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	item := pushNotification{
+		ID:        m.nextID,
+		Title:     req.Title,
+		Body:      req.Body,
+		Category:  req.Category,
+		SessionID: req.SessionID,
+		Source:    req.Source,
+		IsRead:    false,
+		CreatedAt: time.Now().UTC(),
+	}
+	m.items = append(m.items, item)
+	return item, nil
+}
+
+func (m *memoryNotificationStore) Summary(_ context.Context) (notificationSummary, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var sum notificationSummary
+	for _, it := range m.items {
+		if !it.IsRead {
+			sum.UnreadCount++
+		}
+		if it.ID > sum.LatestID {
+			sum.LatestID = it.ID
+		}
+	}
+	return sum, nil
+}
+
+func (m *memoryNotificationStore) List(_ context.Context, limit int, unreadOnly bool, afterID int64) ([]pushNotification, notificationSummary, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var sum notificationSummary
+	out := make([]pushNotification, 0)
+	for _, it := range m.items {
+		if !it.IsRead {
+			sum.UnreadCount++
+		}
+		if it.ID > sum.LatestID {
+			sum.LatestID = it.ID
+		}
+		if unreadOnly && it.IsRead {
+			continue
+		}
+		if afterID > 0 && it.ID <= afterID {
+			continue
+		}
+		out = append(out, it)
+	}
+	if afterID == 0 {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, sum, nil
+}
+
+func (m *memoryNotificationStore) ListAfter(ctx context.Context, afterID int64, limit int) ([]pushNotification, error) {
+	items, _, err := m.List(ctx, limit, false, afterID)
+	return items, err
+}
+
+func (m *memoryNotificationStore) MarkRead(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.items {
+		if m.items[i].ID == id {
+			m.items[i].IsRead = true
+			return nil
+		}
+	}
+	return errNotificationNotFound
+}
+
+func (m *memoryNotificationStore) MarkAllRead(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.items {
+		m.items[i].IsRead = true
+	}
+	return nil
+}
+
 func newTestServer(t *testing.T, hermesHandler http.HandlerFunc) (*server, *httptest.Server) {
 	t.Helper()
 	upstream := httptest.NewServer(hermesHandler)
@@ -114,10 +215,12 @@ func newTestServer(t *testing.T, hermesHandler http.HandlerFunc) (*server, *http
 			TokenTTL:       24 * time.Hour,
 			HermesAPIKey:   "hermes-secret-key",
 		},
-		hermes:  newHermesClient(upstream.URL, "hermes-secret-key"),
-		entries: newMemoryEntryStore(),
-		docs:    newDocStore(assistantDir, memFile),
-		apkDir:  apkDir,
+		hermes:        newHermesClient(upstream.URL, "hermes-secret-key"),
+		entries:       newMemoryEntryStore(),
+		notifications: newMemoryNotificationStore(),
+		notifHub:      newNotificationHub(),
+		docs:          newDocStore(assistantDir, memFile),
+		apkDir:        apkDir,
 	}
 	return srv, upstream
 }
@@ -801,5 +904,143 @@ func TestRunSteerProxy(t *testing.T) {
 	defer badResp.Body.Close()
 	if badResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 on invalid run_id, got %d", badResp.StatusCode)
+	}
+}
+
+func TestPushNotificationsAndSSEStream(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+
+	token, _, err := srv.auth.issueToken(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Seed one notification via X-Hermes-Key before stream connects.
+	pushReq1, _ := http.NewRequest(
+		http.MethodPost,
+		api.URL+"/api/v1/push/notify",
+		strings.NewReader(`{"title":"COROS 同步完成","body":"昨晚睡了 8 小时 03 分，评分 77。","category":"coros"}`),
+	)
+	pushReq1.Header.Set("X-Hermes-Key", "hermes-secret-key")
+	pushReq1.Header.Set("Content-Type", "application/json")
+	r1, err := http.DefaultClient.Do(pushReq1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seeded pushNotification
+	_ = json.NewDecoder(r1.Body).Decode(&seeded)
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusCreated || seeded.ID != 1 {
+		t.Fatalf("expected seeded notification id=1, got status=%d item=%+v", r1.StatusCode, seeded)
+	}
+
+	// 2. Connect SSE stream with after_id=0 and verify live event arrival.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sseReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, api.URL+"/api/v1/events/stream?after_id=0", nil)
+	sseReq.Header.Set("Authorization", "Bearer "+token)
+	sseResp, err := http.DefaultClient.Do(sseReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sseResp.Body.Close()
+	if sseResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 SSE stream, got %d", sseResp.StatusCode)
+	}
+
+	reader := bufio.NewReader(sseResp.Body)
+	readSSEEvent := func() (string, string) {
+		var evName, data string
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("SSE read failed: %v", err)
+			}
+			line = strings.TrimRight(line, "\r\n")
+			if line == "" {
+				if data != "" || evName != "" {
+					return evName, data
+				}
+				continue
+			}
+			if strings.HasPrefix(line, ":") {
+				continue
+			}
+			if strings.HasPrefix(line, "event:") {
+				evName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			} else if strings.HasPrefix(line, "data:") {
+				data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			}
+		}
+	}
+
+	ev1, data1 := readSSEEvent()
+	if ev1 != "connected" || !strings.Contains(data1, `"latest_id":1`) {
+		t.Fatalf("expected connected frame with latest_id=1, got %s %s", ev1, data1)
+	}
+
+	// Trigger live /api/v1/push/test while SSE is open
+	testReq, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/push/test", nil)
+	testReq.Header.Set("Authorization", "Bearer "+token)
+	testResp, err := http.DefaultClient.Do(testReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testResp.Body.Close()
+	if testResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 on push/test, got %d", testResp.StatusCode)
+	}
+
+	ev2, data2 := readSSEEvent()
+	if ev2 != "notification" || !strings.Contains(data2, "Pace 通知测试") {
+		t.Fatalf("expected live notification event, got %s %s", ev2, data2)
+	}
+
+	// 3. Verify listNotifications & mark-read / read-all
+	listReq, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/notifications?after_id=1", nil)
+	listReq.Header.Set("Authorization", "Bearer "+token)
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listPayload struct {
+		Items       []pushNotification `json:"items"`
+		UnreadCount int64              `json:"unread_count"`
+		LatestID    int64              `json:"latest_id"`
+	}
+	_ = json.NewDecoder(listResp.Body).Decode(&listPayload)
+	listResp.Body.Close()
+	if listPayload.UnreadCount != 2 || listPayload.LatestID != 2 || len(listPayload.Items) != 1 || listPayload.Items[0].ID != 2 {
+		t.Fatalf("unexpected notification list after_id=1 payload: %+v", listPayload)
+	}
+
+	readOneReq, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/notifications/1/read", nil)
+	readOneReq.Header.Set("Authorization", "Bearer "+token)
+	roResp, err := http.DefaultClient.Do(readOneReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roResp.Body.Close()
+
+	readAllReq, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/notifications/read-all", nil)
+	readAllReq.Header.Set("Authorization", "Bearer "+token)
+	raResp, err := http.DefaultClient.Do(readAllReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raResp.Body.Close()
+
+	listReq2, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/notifications", nil)
+	listReq2.Header.Set("Authorization", "Bearer "+token)
+	listResp2, _ := http.DefaultClient.Do(listReq2)
+	var sumPayload struct {
+		UnreadCount int64 `json:"unread_count"`
+	}
+	_ = json.NewDecoder(listResp2.Body).Decode(&sumPayload)
+	listResp2.Body.Close()
+	if sumPayload.UnreadCount != 0 {
+		t.Fatalf("expected unread_count=0 after read-all, got %d", sumPayload.UnreadCount)
 	}
 }

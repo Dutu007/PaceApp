@@ -20,9 +20,14 @@ import com.dutu007.paceapp.data.DocSummary
 import com.dutu007.paceapp.data.KnowledgeGraphData
 import com.dutu007.paceapp.data.PaceRepository
 import com.dutu007.paceapp.data.PendingAttachment
+import com.dutu007.paceapp.data.PushNotificationItem
 import com.dutu007.paceapp.data.SessionItem
 import com.dutu007.paceapp.data.ToolActivity
 import com.dutu007.paceapp.data.UserProfile
+import com.dutu007.paceapp.push.PaceNotificationHelper
+import com.dutu007.paceapp.push.PacePushPrefs
+import com.dutu007.paceapp.push.PacePushService
+import com.dutu007.paceapp.push.PushConnectionState
 import com.dutu007.paceapp.widget.PaceWidgetUpdater
 import com.dutu007.paceapp.widget.WidgetSyncManager
 import com.dutu007.paceapp.widget.WidgetSyncWorker
@@ -105,6 +110,14 @@ data class PaceUiState(
     val analyticsRange: String = "7d",
     val analyticsBusy: Boolean = false,
 
+    // Proactive push notifications & live connection state
+    val notifications: List<PushNotificationItem> = emptyList(),
+    val unreadNotificationCount: Long = 0L,
+    val notificationsLoading: Boolean = false,
+    val livePushEnabled: Boolean = true,
+    val pushConnectionState: PushConnectionState = PushConnectionState.DISCONNECTED,
+    val highlightedNotification: PushNotificationItem? = null,
+
     // Global notice & updates
     val notice: PaceNotice? = null,
     val checkingUpdate: Boolean = false,
@@ -138,17 +151,42 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     val currentVersionName: String get() = BuildConfig.VERSION_NAME
 
     init {
+        val appCtx = getApplication<Application>().applicationContext
+        viewModelScope.launch {
+            PacePushPrefs.connectionState.collect { connState ->
+                _uiState.update { it.copy(pushConnectionState = connState) }
+            }
+        }
+        viewModelScope.launch {
+            PacePushPrefs.incomingNotifications.collect { incoming ->
+                _uiState.update { s ->
+                    val merged = (listOf(incoming) + s.notifications.filterNot { it.id == incoming.id }).take(80)
+                    val unread = merged.count { !it.isRead }.toLong()
+                    s.copy(
+                        notifications = merged,
+                        unreadNotificationCount = maxOf(s.unreadNotificationCount, unread),
+                        highlightedNotification = incoming,
+                    )
+                }
+                if (incoming.category == "coros") {
+                    refreshAnalytics()
+                }
+            }
+        }
         if (repository.hasSession()) {
             _uiState.update {
                 it.copy(
                     loading = false,
                     authenticated = true,
                     user = repository.currentUser(),
+                    livePushEnabled = PacePushPrefs.isLiveEnabled(appCtx),
+                    pushConnectionState = PacePushPrefs.connectionState.value,
                 )
             }
+            PacePushService.syncServiceState(appCtx)
             refreshAll()
             checkForUpdate(manual = false)
-            WidgetSyncManager.ensurePeriodicSync(getApplication())
+            WidgetSyncManager.ensurePeriodicSync(appCtx)
         } else {
             _uiState.update { it.copy(loading = false, authenticated = false) }
         }
@@ -312,17 +350,20 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(authBusy = true, notice = null) }
             try {
                 val user = repository.signIn(username, password)
+                val appCtx = getApplication<Application>().applicationContext
                 _uiState.update {
                     it.copy(
                         authBusy = false,
                         authenticated = true,
                         user = user,
                         passwordInput = "",
+                        livePushEnabled = PacePushPrefs.isLiveEnabled(appCtx),
                     )
                 }
+                PacePushService.syncServiceState(appCtx)
                 refreshAll()
                 checkForUpdate(manual = false)
-                WidgetSyncManager.ensurePeriodicSync(getApplication())
+                WidgetSyncManager.ensurePeriodicSync(appCtx)
             } catch (e: Exception) {
                 _uiState.update { it.copy(authBusy = false) }
                 showNotice(e.toDisplayMessage(), isError = true)
@@ -335,10 +376,13 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         deferredFollowUps.clear()
         activeAssistantMsgId = null
         streamJob?.cancel()
+        val appCtx = getApplication<Application>().applicationContext
+        PacePushPrefs.resetSessionState(appCtx)
         viewModelScope.launch {
             repository.signOut()
+            PacePushService.syncServiceState(appCtx)
             _uiState.value = PaceUiState(loading = false, authenticated = false)
-            PaceWidgetUpdater.updateAllWidgets(getApplication())
+            PaceWidgetUpdater.updateAllWidgets(appCtx)
         }
     }
 
@@ -347,9 +391,129 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             val online = repository.checkHermesHealth()
             _uiState.update { it.copy(hermesOnline = online) }
             loadSessionsInternal(autoSelect = true)
+            refreshNotifications()
             refreshAnalytics()
             refreshDocs()
             refreshGraph()
+        }
+    }
+
+    // -- Proactive Push Notifications --
+
+    fun refreshNotifications() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(notificationsLoading = true) }
+            try {
+                val page = repository.listNotifications(limit = 50)
+                if (page.latestId > 0L) {
+                    PacePushPrefs.updateLastSeenId(getApplication(), page.latestId)
+                }
+                _uiState.update {
+                    it.copy(
+                        notificationsLoading = false,
+                        notifications = page.items,
+                        unreadNotificationCount = page.unreadCount,
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(notificationsLoading = false) }
+                handleAuthError(e)
+            }
+        }
+    }
+
+    fun toggleLivePush(enabled: Boolean) {
+        val appCtx = getApplication<Application>().applicationContext
+        PacePushPrefs.setLiveEnabled(appCtx, enabled)
+        _uiState.update { it.copy(livePushEnabled = enabled) }
+        PacePushService.syncServiceState(appCtx)
+        showNotice(if (enabled) "已开启 Hermes 实时在线连接" else "已关闭后台长连接")
+    }
+
+    fun markNotificationRead(id: Long) {
+        _uiState.update { s ->
+            val updated = s.notifications.map { if (it.id == id) it.copy(isRead = true) else it }
+            val unread = updated.count { !it.isRead }.toLong()
+            val nextHi = if (s.highlightedNotification?.id == id) null else s.highlightedNotification
+            s.copy(
+                notifications = updated,
+                unreadNotificationCount = unread,
+                highlightedNotification = nextHi,
+            )
+        }
+        viewModelScope.launch {
+            runCatching { repository.markNotificationRead(id) }
+        }
+    }
+
+    fun markAllNotificationsRead() {
+        _uiState.update { s ->
+            s.copy(
+                notifications = s.notifications.map { it.copy(isRead = true) },
+                unreadNotificationCount = 0L,
+                highlightedNotification = null,
+            )
+        }
+        viewModelScope.launch {
+            runCatching { repository.markAllNotificationsRead() }
+        }
+    }
+
+    fun sendTestPush() {
+        viewModelScope.launch {
+            try {
+                val item = repository.sendTestNotification()
+                PaceNotificationHelper.showAlertNotification(getApplication(), item)
+                _uiState.update { s ->
+                    val merged = (listOf(item) + s.notifications.filterNot { it.id == item.id }).take(80)
+                    s.copy(
+                        notifications = merged,
+                        unreadNotificationCount = merged.count { !it.isRead }.toLong(),
+                        highlightedNotification = item,
+                    )
+                }
+                showNotice("已发出测试提醒（如未弹窗请检查系统通知权限）")
+            } catch (e: Exception) {
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    fun openNotificationById(id: Long) {
+        _uiState.update { s ->
+            val found = s.notifications.firstOrNull { it.id == id } ?: s.highlightedNotification
+            s.copy(currentTab = PaceTab.CHAT, highlightedNotification = found)
+        }
+        viewModelScope.launch {
+            runCatching {
+                val page = repository.listNotifications(limit = 50)
+                val target = page.items.firstOrNull { it.id == id }
+                _uiState.update { s ->
+                    s.copy(
+                        notifications = page.items,
+                        unreadNotificationCount = page.unreadCount,
+                        highlightedNotification = target ?: s.highlightedNotification,
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissHighlightedNotification() {
+        _uiState.update { it.copy(highlightedNotification = null) }
+    }
+
+    fun replyToNotification(item: PushNotificationItem) {
+        markNotificationRead(item.id)
+        val snippet = item.body.trim().replace('\n', ' ').take(90)
+        val promptPrefix = "关于你刚才的提醒「${item.title.ifBlank { "通知" }}」（$snippet）："
+        _uiState.update {
+            it.copy(
+                currentTab = PaceTab.CHAT,
+                highlightedNotification = null,
+                draft = promptPrefix,
+                draftCursorTick = it.draftCursorTick + 1,
+            )
         }
     }
 

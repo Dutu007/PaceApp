@@ -79,6 +79,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.dutu007.paceapp.data.ApprovalRequest
 import com.dutu007.paceapp.data.ChatMessage
+import com.dutu007.paceapp.data.PushNotificationItem
 import com.dutu007.paceapp.data.SessionItem
 import com.dutu007.paceapp.ui.theme.PacePalette
 import java.io.File
@@ -117,6 +118,19 @@ fun ChatScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        val activeNotice = state.highlightedNotification ?: state.notifications.firstOrNull { !it.isRead }
+        if (activeNotice != null) {
+            ProactiveNotificationBanner(
+                item = activeNotice,
+                onReply = { viewModel.replyToNotification(activeNotice) },
+                onAck = {
+                    if (!activeNotice.isRead) {
+                        viewModel.markNotificationRead(activeNotice.id)
+                    }
+                    viewModel.dismissHighlightedNotification()
+                },
+            )
+        }
         state.pendingApproval?.let { approval ->
             ApprovalCard(approval = approval, onChoice = viewModel::respondApproval)
         }
@@ -1275,6 +1289,90 @@ private fun ApprovalCard(approval: ApprovalRequest, onChoice: (String) -> Unit) 
                 if ("once" in approval.choices) Button(onClick = { onChoice("once") }) { Text("允许一次") }
                 if ("session" in approval.choices) OutlinedButton(onClick = { onChoice("session") }) { Text("本会话允许") }
                 OutlinedButton(onClick = { onChoice("deny") }) { Text("拒绝") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProactiveNotificationBanner(
+    item: PushNotificationItem,
+    onReply: () -> Unit,
+    onAck: () -> Unit,
+) {
+    Surface(
+        color = PacePalette.PrimarySoft.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, PacePalette.Primary.copy(alpha = 0.25f)),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    color = PacePalette.Primary,
+                    shape = RoundedCornerShape(6.dp),
+                ) {
+                    Text(
+                        text = "Hermes 主动提醒",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                    )
+                }
+                if (item.createdAt.isNotBlank()) {
+                    Text(
+                        text = item.createdAt.take(16).replace("T", " "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PacePalette.TextSecondary,
+                    )
+                }
+            }
+            Text(
+                text = item.title.ifBlank { "新提醒" },
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.titleSmall,
+                color = PacePalette.TextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (item.body.isNotBlank()) {
+                Text(
+                    text = item.body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = PacePalette.TextSecondary,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = onAck,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp),
+                ) {
+                    Text("已知晓", style = MaterialTheme.typography.labelMedium)
+                }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(
+                    onClick = onReply,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp),
+                ) {
+                    Text("回复", style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
     }

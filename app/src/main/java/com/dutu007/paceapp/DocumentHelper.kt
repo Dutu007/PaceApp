@@ -408,6 +408,8 @@ fun InAppDocumentViewerDialog(
 
     val isPdf = resolvedMime.contains("pdf", ignoreCase = true) ||
         target.title.endsWith(".pdf", ignoreCase = true)
+    val isDocx = target.title.endsWith(".docx", ignoreCase = true) ||
+        resolvedMime.contains("wordprocessingml", ignoreCase = true)
     val isImg = (target is InAppPreviewTarget.LocalUri && target.isImage) ||
         resolvedMime.startsWith("image/") ||
         isImageFileName(target.title)
@@ -417,7 +419,7 @@ fun InAppDocumentViewerDialog(
         errorMsg = null
         when (target) {
             is InAppPreviewTarget.LocalUri -> {
-                if (isPdf || isImg) {
+                if (isPdf || isImg || isDocx) {
                     cachedFile = copyUriToDocCache(context, target.uriString, target.title)
                     if (cachedFile == null && isPdf) {
                         errorMsg = "无法读取本地 PDF 文件"
@@ -429,7 +431,7 @@ fun InAppDocumentViewerDialog(
             }
             is InAppPreviewTarget.ServerDoc -> {
                 runCatching {
-                    if (isPdf || isImg) {
+                    if (isPdf || isImg || isDocx) {
                         cachedFile = viewModel.downloadServerDocToCache(target.docPath, target.title)
                     } else if (textContent.isBlank()) {
                         val detail = viewModel.fetchDocDetailOnce(target.docPath)
@@ -439,7 +441,17 @@ fun InAppDocumentViewerDialog(
                         }
                     }
                 }.onFailure { e ->
-                    errorMsg = e.message ?: "文档加载失败"
+                    if (isDocx) {
+                        runCatching {
+                            val detail = viewModel.fetchDocDetailOnce(target.docPath)
+                            textContent = detail.content
+                        }
+                        if (textContent.isBlank()) {
+                            errorMsg = e.message ?: "Word 文档下载失败"
+                        }
+                    } else {
+                        errorMsg = e.message ?: "文档加载失败"
+                    }
                 }
                 loading = false
             }
@@ -569,6 +581,15 @@ fun InAppDocumentViewerDialog(
                         }
                         isPdf && cachedFile != null -> {
                             PdfDocumentPagesView(file = cachedFile!!)
+                        }
+                        isDocx && cachedFile != null -> {
+                            DocxRichDocumentView(
+                                file = cachedFile!!,
+                                fallbackText = textContent,
+                                onTextReady = { extracted ->
+                                    if (extracted.isNotBlank()) textContent = extracted
+                                },
+                            )
                         }
                         else -> {
                             SelectionContainer {

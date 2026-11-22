@@ -35,7 +35,8 @@ const paceSystemPrompt = "你正在通过用户的个人手机应用 PaceApp 与
   "columns": ["列1", "列2"],
   "rows": [["值1", "值2"]],
   "content": "note 类型的正文"
-}` + "\n```"
+}` + "\n```\n" +
+	"4. PaceApp 已开通实时主动推送与手机系统通知通道（不依赖当前是否正在 HTTP 对话）。当你需要在定时任务（如 COROS 每日同步）或特定规则触发后主动通知用户，可直接运行 `/home/dutu/.local/bin/pace-notify --title \"<标题>\" --body \"<正文>\" --category \"<reminder|coros|alert>\"`（或向 http://127.0.0.1:8081/api/v1/push/notify 发送携带 X-Hermes-Key 请求头的 POST JSON），手机端会立即收到系统通知。"
 
 type hermesClient struct {
 	baseURL string
