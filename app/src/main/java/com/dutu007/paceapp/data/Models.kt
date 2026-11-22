@@ -25,6 +25,9 @@ data class ChatMessage(
     val toolName: String? = null,
     val timestamp: Double? = null,
     val isStreaming: Boolean = false,
+    val isProactive: Boolean = false,
+    val proactiveCategory: String? = null,
+    val proactiveTitle: String? = null,
 )
 
 data class ToolActivity(

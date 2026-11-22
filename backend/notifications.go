@@ -195,7 +195,7 @@ func (s *server) createAndBroadcastNotification(ctx context.Context, req createN
 	}
 	req.Title = strings.TrimSpace(req.Title)
 	if req.Title == "" {
-		req.Title = "Hermes 提醒"
+		req.Title = "小洛提醒"
 	}
 	req.Body = truncateRunes(strings.TrimSpace(req.Body), 8000)
 	req.Category = strings.TrimSpace(req.Category)
@@ -245,7 +245,7 @@ func (s *server) pushTest(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := s.createAndBroadcastNotification(r.Context(), createNotificationRequest{
 		Title:    "Pace 通知测试",
-		Body:     "实时连接正常，Hermes 已可随时向你主动发送提醒。",
+		Body:     "实时连接正常，小洛已可随时向你主动发送提醒。",
 		Category: "system",
 		Source:   "test",
 	})

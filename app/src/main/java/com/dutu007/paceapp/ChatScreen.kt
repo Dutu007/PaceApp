@@ -79,7 +79,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.dutu007.paceapp.data.ApprovalRequest
 import com.dutu007.paceapp.data.ChatMessage
-import com.dutu007.paceapp.data.PushNotificationItem
 import com.dutu007.paceapp.data.SessionItem
 import com.dutu007.paceapp.ui.theme.PacePalette
 import java.io.File
@@ -103,46 +102,47 @@ fun ChatScreen(
     var sessionToManage by remember { mutableStateOf<SessionItem?>(null) }
     var renameText by remember { mutableStateOf("") }
     var previewTarget by remember { mutableStateOf<InAppPreviewTarget?>(null) }
-    val reversedMessages = remember(state.messages) { state.messages.asReversed() }
+    val displayedMessages = remember(
+        state.messages,
+        state.notifications,
+        state.activeSessionId,
+        state.sessions,
+        state.liveNotificationIds,
+    ) { state.mergedChatMessages() }
+    val reversedMessages = remember(displayedMessages) { displayedMessages.asReversed() }
 
     LaunchedEffect(state.activeSessionId) {
-        if (state.messages.isNotEmpty()) {
+        if (displayedMessages.isNotEmpty()) {
             listState.scrollToItem(0)
         }
     }
 
-    LaunchedEffect(state.messages.lastOrNull()?.id, state.messages.lastOrNull()?.content) {
-        if (state.messages.isNotEmpty() && listState.firstVisibleItemIndex <= 1) {
+    LaunchedEffect(state.scrollToBottomTick) {
+        if (state.scrollToBottomTick > 0 && displayedMessages.isNotEmpty()) {
+            listState.scrollToItem(0)
+        }
+    }
+
+    val latestDisplayedMsg = displayedMessages.lastOrNull()
+    LaunchedEffect(latestDisplayedMsg?.id, latestDisplayedMsg?.content?.length) {
+        if (displayedMessages.isNotEmpty() && listState.firstVisibleItemIndex <= 2) {
             listState.scrollToItem(0)
         }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        val activeNotice = state.highlightedNotification ?: state.notifications.firstOrNull { !it.isRead }
-        if (activeNotice != null) {
-            ProactiveNotificationBanner(
-                item = activeNotice,
-                onReply = { viewModel.replyToNotification(activeNotice) },
-                onAck = {
-                    if (!activeNotice.isRead) {
-                        viewModel.markNotificationRead(activeNotice.id)
-                    }
-                    viewModel.dismissHighlightedNotification()
-                },
-            )
-        }
         state.pendingApproval?.let { approval ->
             ApprovalCard(approval = approval, onChoice = viewModel::respondApproval)
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
-                state.messagesLoading && state.messages.isEmpty() -> {
+                state.messagesLoading && displayedMessages.isEmpty() -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
                 }
-                state.messages.isEmpty() -> {
+                displayedMessages.isEmpty() -> {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -167,11 +167,11 @@ fun ChatScreen(
                                         modifier = Modifier.size(34.dp),
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
-                                            Text("H", color = Color.White, fontWeight = FontWeight.Bold)
+                                            Text("洛", color = Color.White, fontWeight = FontWeight.Bold)
                                         }
                                     }
                                     Column {
-                                        Text("你好，我是 Hermes", style = MaterialTheme.typography.titleMedium, color = PacePalette.TextPrimary)
+                                        Text("你好，我是小洛", style = MaterialTheme.typography.titleMedium, color = PacePalette.TextPrimary)
                                         Text("知识库管理 · 运动与作息分析 · 智能卡片", style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary)
                                     }
                                 }
@@ -605,16 +605,10 @@ private fun DoubaoComposer(
                 }
             }
         } else if (state.streaming) {
-            val latestTool = state.toolActivities.lastOrNull()
-            val statusLine = buildString {
-                if (latestTool != null) {
-                    append("⚙ ${latestTool.name}：${latestTool.preview ?: latestTool.status}")
-                } else {
-                    append("Hermes 思考中 · 可直接输入并发送补充指令")
-                }
-                if (state.queuedFollowUpCount > 0) {
-                    append(" · 已排队 ${state.queuedFollowUpCount} 条")
-                }
+            val statusLine = if (state.queuedFollowUpCount > 0) {
+                "小洛思考中 · 已排队 ${state.queuedFollowUpCount} 条"
+            } else {
+                "小洛思考中..."
             }
             Surface(
                 color = PacePalette.PrimarySoft,
@@ -628,7 +622,7 @@ private fun DoubaoComposer(
                 ) {
                     Text(
                         text = statusLine,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.labelSmall,
                         color = PacePalette.Primary,
@@ -1048,7 +1042,7 @@ private fun MessageItem(
 ) {
     val context = LocalContext.current
     val isUser = message.role == "user"
-    val isTool = message.role == "tool"
+    if (message.role == "tool") return
 
     if (isUser) {
         val (cleanText, chips) = remember(message.content) { extractChatAttachmentChips(message.content) }
@@ -1138,34 +1132,6 @@ private fun MessageItem(
         return
     }
 
-    if (isTool) {
-        Surface(
-            color = PacePalette.Muted,
-            border = BorderStroke(1.dp, PacePalette.CardBorder),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    "⚙ 工具调用：${message.toolName ?: "tool"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = PacePalette.Primary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (message.content.isNotBlank()) {
-                    Text(
-                        message.content,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = PacePalette.TextSecondary,
-                        maxLines = 4,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-        return
-    }
-
     // Assistant message: full-width breathable editorial layout (RikkaHub style)
     val (cleanAssistantText, assistantChips) = remember(message.content) {
         extractChatAttachmentChips(message.content)
@@ -1182,9 +1148,22 @@ private fun MessageItem(
                     .background(PacePalette.Primary),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("H", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                Text("洛", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             }
-            Text("Hermes", style = MaterialTheme.typography.labelMedium, color = PacePalette.TextSecondary, fontWeight = FontWeight.SemiBold)
+            Text("小洛", style = MaterialTheme.typography.labelMedium, color = PacePalette.TextSecondary, fontWeight = FontWeight.SemiBold)
+            if (message.isProactive) {
+                Surface(
+                    color = PacePalette.PrimarySoft,
+                    shape = RoundedCornerShape(6.dp),
+                ) {
+                    Text(
+                        text = "主动提醒",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PacePalette.Primary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
         }
 
         SelectionContainer {
@@ -1280,7 +1259,7 @@ private fun ApprovalCard(approval: ApprovalRequest, onChoice: (String) -> Unit) 
         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Hermes 请求操作授权", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+            Text("小洛请求操作授权", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
             if (approval.description.isNotBlank()) Text(approval.description, style = MaterialTheme.typography.bodySmall)
             if (approval.command.isNotBlank()) {
                 Text(approval.command, style = MaterialTheme.typography.labelSmall, color = PacePalette.TextSecondary)
@@ -1289,90 +1268,6 @@ private fun ApprovalCard(approval: ApprovalRequest, onChoice: (String) -> Unit) 
                 if ("once" in approval.choices) Button(onClick = { onChoice("once") }) { Text("允许一次") }
                 if ("session" in approval.choices) OutlinedButton(onClick = { onChoice("session") }) { Text("本会话允许") }
                 OutlinedButton(onClick = { onChoice("deny") }) { Text("拒绝") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProactiveNotificationBanner(
-    item: PushNotificationItem,
-    onReply: () -> Unit,
-    onAck: () -> Unit,
-) {
-    Surface(
-        color = PacePalette.PrimarySoft.copy(alpha = 0.72f),
-        border = BorderStroke(1.dp, PacePalette.Primary.copy(alpha = 0.25f)),
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(
-                    color = PacePalette.Primary,
-                    shape = RoundedCornerShape(6.dp),
-                ) {
-                    Text(
-                        text = "Hermes 主动提醒",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                    )
-                }
-                if (item.createdAt.isNotBlank()) {
-                    Text(
-                        text = item.createdAt.take(16).replace("T", " "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = PacePalette.TextSecondary,
-                    )
-                }
-            }
-            Text(
-                text = item.title.ifBlank { "新提醒" },
-                fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.titleSmall,
-                color = PacePalette.TextPrimary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (item.body.isNotBlank()) {
-                Text(
-                    text = item.body,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = PacePalette.TextSecondary,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(
-                    onClick = onAck,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                ) {
-                    Text("已知晓", style = MaterialTheme.typography.labelMedium)
-                }
-                Spacer(Modifier.width(6.dp))
-                OutlinedButton(
-                    onClick = onReply,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                ) {
-                    Text("回复", style = MaterialTheme.typography.labelMedium)
-                }
             }
         }
     }

@@ -58,6 +58,114 @@ fun appendTranscriptText(existingDraft: String, transcript: String): String {
     }
 }
 
+fun parseIsoEpochSeconds(iso: String): Double? {
+    val trimmed = iso.trim()
+    if (trimmed.isEmpty()) return null
+    return runCatching {
+        java.time.Instant.parse(trimmed).toEpochMilli() / 1000.0
+    }.recoverCatching {
+        java.time.OffsetDateTime.parse(trimmed).toInstant().toEpochMilli() / 1000.0
+    }.getOrNull()
+}
+
+fun formatProactiveNotificationContent(item: PushNotificationItem): String {
+    val title = item.title.trim()
+    val body = item.body.trim()
+    return when {
+        title.isBlank() -> body
+        body.isBlank() -> "**$title**"
+        body.startsWith(title) -> body
+        else -> "**$title**\n\n$body"
+    }
+}
+
+fun mergeChatAndProactiveMessages(
+    sessionMessages: List<ChatMessage>,
+    notifications: List<PushNotificationItem>,
+    activeSessionId: String?,
+    isLatestSession: Boolean,
+    liveNotificationIds: Set<Long> = emptySet(),
+): List<ChatMessage> {
+    val filteredSession = sessionMessages.filterNot { msg ->
+        msg.role == "tool" || (!msg.isStreaming && msg.content.isBlank())
+    }
+    val oldestSessionTs = filteredSession.mapNotNull { it.timestamp }.minOrNull()
+
+    val matchingPushes = notifications.mapNotNull { item ->
+        val itemTs = parseIsoEpochSeconds(item.createdAt)
+        val include = if (item.sessionId.isNotBlank()) {
+            item.sessionId == activeSessionId
+        } else if (filteredSession.isNotEmpty()) {
+            isLatestSession && (
+                item.id in liveNotificationIds ||
+                    !item.isRead ||
+                    (oldestSessionTs != null && (itemTs ?: Double.MAX_VALUE) >= oldestSessionTs - 86400.0)
+                )
+        } else {
+            item.id in liveNotificationIds || !item.isRead
+        }
+        if (!include) return@mapNotNull null
+        val msg = ChatMessage(
+            id = "push_${item.id}",
+            role = "assistant",
+            content = formatProactiveNotificationContent(item),
+            timestamp = itemTs,
+            isProactive = true,
+            proactiveCategory = item.category,
+            proactiveTitle = item.title,
+        )
+        Triple(msg, itemTs ?: Double.MAX_VALUE, item.id)
+    }
+
+    if (matchingPushes.isEmpty()) return filteredSession
+
+    val sessionTs = DoubleArray(filteredSession.size)
+    var nextKnown: Double? = null
+    for (i in filteredSession.indices.reversed()) {
+        val ts = filteredSession[i].timestamp
+        if (ts != null) {
+            nextKnown = ts
+            sessionTs[i] = ts
+        } else if (nextKnown != null) {
+            nextKnown -= 0.001
+            sessionTs[i] = nextKnown
+        } else {
+            sessionTs[i] = Double.NaN
+        }
+    }
+    var prevKnown = 0.0
+    for (i in filteredSession.indices) {
+        if (sessionTs[i].isNaN()) {
+            prevKnown += 0.001
+            sessionTs[i] = prevKnown
+        } else {
+            if (i > 0 && sessionTs[i] <= sessionTs[i - 1]) {
+                sessionTs[i] = sessionTs[i - 1] + 0.0001
+            }
+            prevKnown = sessionTs[i]
+        }
+    }
+
+    data class SortableMsg(
+        val message: ChatMessage,
+        val sortTs: Double,
+        val group: Int,
+        val subOrder: Long,
+    )
+
+    val combined = ArrayList<SortableMsg>(filteredSession.size + matchingPushes.size)
+    filteredSession.forEachIndexed { idx, msg ->
+        combined += SortableMsg(msg, sessionTs[idx], group = 0, subOrder = idx.toLong())
+    }
+    matchingPushes.forEach { (msg, ts, pushId) ->
+        combined += SortableMsg(msg, ts, group = 1, subOrder = pushId)
+    }
+
+    return combined
+        .sortedWith(compareBy<SortableMsg>({ it.sortTs }, { it.group }, { it.subOrder }))
+        .map { it.message }
+}
+
 enum class PaceTab { CHAT, ANALYTICS, DOCS }
 
 data class PaceNotice(
@@ -116,7 +224,8 @@ data class PaceUiState(
     val notificationsLoading: Boolean = false,
     val livePushEnabled: Boolean = true,
     val pushConnectionState: PushConnectionState = PushConnectionState.DISCONNECTED,
-    val highlightedNotification: PushNotificationItem? = null,
+    val liveNotificationIds: Set<Long> = emptySet(),
+    val scrollToBottomTick: Int = 0,
 
     // Global notice & updates
     val notice: PaceNotice? = null,
@@ -125,7 +234,18 @@ data class PaceUiState(
     val updateDownloading: Boolean = false,
     val updateProgress: Int = 0,
     val updateReadyPath: String? = null,
-)
+) {
+    fun mergedChatMessages(): List<ChatMessage> {
+        val isLatest = activeSessionId == null || sessions.firstOrNull()?.id == activeSessionId
+        return mergeChatAndProactiveMessages(
+            sessionMessages = messages,
+            notifications = notifications,
+            activeSessionId = activeSessionId,
+            isLatestSession = isLatest,
+            liveNotificationIds = liveNotificationIds,
+        )
+    }
+}
 
 class PaceViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = PaceRepository(application.applicationContext)
@@ -147,6 +267,8 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     private val deferredFollowUps = ArrayDeque<PendingFollowUp>()
     private var userRequestedStop = false
     private var activeAssistantMsgId: String? = null
+    private var splitStreamPrefix: String = ""
+    private val contextualizedPushIds = mutableSetOf<String>()
 
     val currentVersionName: String get() = BuildConfig.VERSION_NAME
 
@@ -165,8 +287,12 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                     s.copy(
                         notifications = merged,
                         unreadNotificationCount = maxOf(s.unreadNotificationCount, unread),
-                        highlightedNotification = incoming,
+                        liveNotificationIds = s.liveNotificationIds + incoming.id,
+                        scrollToBottomTick = s.scrollToBottomTick + 1,
                     )
+                }
+                if (_uiState.value.currentTab == PaceTab.CHAT && !incoming.isRead) {
+                    markNotificationRead(incoming.id)
                 }
                 if (incoming.category == "coros") {
                     refreshAnalytics()
@@ -200,7 +326,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 refreshDocs()
                 refreshGraph()
             }
-            PaceTab.CHAT -> Unit
+            PaceTab.CHAT -> syncChatNotificationReadState()
         }
     }
     fun setUsername(value: String) = _uiState.update { it.copy(usernameInput = value) }
@@ -375,6 +501,8 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         userRequestedStop = true
         deferredFollowUps.clear()
         activeAssistantMsgId = null
+        splitStreamPrefix = ""
+        contextualizedPushIds.clear()
         streamJob?.cancel()
         val appCtx = getApplication<Application>().applicationContext
         PacePushPrefs.resetSessionState(appCtx)
@@ -415,6 +543,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                         unreadNotificationCount = page.unreadCount,
                     )
                 }
+                syncChatNotificationReadState()
             } catch (e: Exception) {
                 _uiState.update { it.copy(notificationsLoading = false) }
                 handleAuthError(e)
@@ -427,18 +556,16 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         PacePushPrefs.setLiveEnabled(appCtx, enabled)
         _uiState.update { it.copy(livePushEnabled = enabled) }
         PacePushService.syncServiceState(appCtx)
-        showNotice(if (enabled) "已开启 Hermes 实时在线连接" else "已关闭后台长连接")
+        showNotice(if (enabled) "已开启小洛实时在线连接" else "已关闭后台长连接")
     }
 
     fun markNotificationRead(id: Long) {
         _uiState.update { s ->
             val updated = s.notifications.map { if (it.id == id) it.copy(isRead = true) else it }
             val unread = updated.count { !it.isRead }.toLong()
-            val nextHi = if (s.highlightedNotification?.id == id) null else s.highlightedNotification
             s.copy(
                 notifications = updated,
                 unreadNotificationCount = unread,
-                highlightedNotification = nextHi,
             )
         }
         viewModelScope.launch {
@@ -451,12 +578,31 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             s.copy(
                 notifications = s.notifications.map { it.copy(isRead = true) },
                 unreadNotificationCount = 0L,
-                highlightedNotification = null,
             )
         }
         viewModelScope.launch {
             runCatching { repository.markAllNotificationsRead() }
         }
+    }
+
+    private fun syncChatNotificationReadState() {
+        val s = _uiState.value
+        if (s.currentTab != PaceTab.CHAT) return
+        val visibleUnreadIds = s.mergedChatMessages()
+            .filter { it.isProactive && it.id.startsWith("push_") }
+            .mapNotNull { it.id.removePrefix("push_").toLongOrNull() }
+            .filter { pid -> s.notifications.any { it.id == pid && !it.isRead } }
+        if (visibleUnreadIds.isEmpty()) return
+        _uiState.update { cur ->
+            cur.copy(liveNotificationIds = cur.liveNotificationIds + visibleUnreadIds)
+        }
+        visibleUnreadIds.forEach { markNotificationRead(it) }
+    }
+
+    private fun nextMessageTimestamp(state: PaceUiState = _uiState.value): Double {
+        val nowSec = System.currentTimeMillis() / 1000.0
+        val maxExisting = state.mergedChatMessages().mapNotNull { it.timestamp }.maxOrNull() ?: 0.0
+        return maxOf(nowSec, maxExisting + 0.01)
     }
 
     fun sendTestPush() {
@@ -469,10 +615,14 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                     s.copy(
                         notifications = merged,
                         unreadNotificationCount = merged.count { !it.isRead }.toLong(),
-                        highlightedNotification = item,
+                        liveNotificationIds = s.liveNotificationIds + item.id,
+                        scrollToBottomTick = s.scrollToBottomTick + 1,
                     )
                 }
-                showNotice("已发出测试提醒（如未弹窗请检查系统通知权限）")
+                if (_uiState.value.currentTab == PaceTab.CHAT && !item.isRead) {
+                    markNotificationRead(item.id)
+                }
+                showNotice("已发出测试提醒，内容已同步到对话中")
             } catch (e: Exception) {
                 if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
             }
@@ -481,9 +631,13 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openNotificationById(id: Long) {
         _uiState.update { s ->
-            val found = s.notifications.firstOrNull { it.id == id } ?: s.highlightedNotification
-            s.copy(currentTab = PaceTab.CHAT, highlightedNotification = found)
+            s.copy(
+                currentTab = PaceTab.CHAT,
+                liveNotificationIds = s.liveNotificationIds + id,
+                scrollToBottomTick = s.scrollToBottomTick + 1,
+            )
         }
+        markNotificationRead(id)
         viewModelScope.launch {
             runCatching {
                 val page = repository.listNotifications(limit = 50)
@@ -492,28 +646,15 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                     s.copy(
                         notifications = page.items,
                         unreadNotificationCount = page.unreadCount,
-                        highlightedNotification = target ?: s.highlightedNotification,
                     )
                 }
+                if (target != null && target.sessionId.isNotBlank() &&
+                    target.sessionId != _uiState.value.activeSessionId &&
+                    !_uiState.value.streaming
+                ) {
+                    selectSession(target.sessionId)
+                }
             }
-        }
-    }
-
-    fun dismissHighlightedNotification() {
-        _uiState.update { it.copy(highlightedNotification = null) }
-    }
-
-    fun replyToNotification(item: PushNotificationItem) {
-        markNotificationRead(item.id)
-        val snippet = item.body.trim().replace('\n', ' ').take(90)
-        val promptPrefix = "关于你刚才的提醒「${item.title.ifBlank { "通知" }}」（$snippet）："
-        _uiState.update {
-            it.copy(
-                currentTab = PaceTab.CHAT,
-                highlightedNotification = null,
-                draft = promptPrefix,
-                draftCursorTick = it.draftCursorTick + 1,
-            )
         }
     }
 
@@ -574,8 +715,10 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                     messages = page.messages,
                     hasOlderMessages = hasOlder,
                     messageWindowLimit = limit,
+                    scrollToBottomTick = if (limit == 80) it.scrollToBottomTick + 1 else it.scrollToBottomTick,
                 )
             }
+            syncChatNotificationReadState()
         } catch (e: Exception) {
             _uiState.update { it.copy(messagesLoading = false) }
             if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
@@ -609,6 +752,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                         messageWindowLimit = 80,
                         toolActivities = emptyList(),
                         pendingApproval = null,
+                        liveNotificationIds = emptySet(),
                     )
                 }
             } catch (e: Exception) {
@@ -689,6 +833,17 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
                 return@launch
             }
+            val lastMerged = _uiState.value.mergedChatMessages().lastOrNull()
+            val proactiveContextPrefix = if (
+                lastMerged != null &&
+                lastMerged.isProactive &&
+                lastMerged.id !in contextualizedPushIds
+            ) {
+                contextualizedPushIds.add(lastMerged.id)
+                "[PACE_PROACTIVE_CONTEXT]\n小洛刚刚主动推送给用户的提醒：\n${lastMerged.content}\n[/PACE_PROACTIVE_CONTEXT]\n\n"
+            } else {
+                ""
+            }
             _uiState.update {
                 it.copy(
                     draft = "",
@@ -697,7 +852,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             }
             startStreamTurn(
                 sessionId = sessionId,
-                finalMessage = prepared.finalMessage,
+                finalMessage = proactiveContextPrefix + prepared.finalMessage,
                 imageUrls = prepared.imageUrls,
                 userDisplaySummary = prepared.displaySummary,
             )
@@ -819,25 +974,65 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
+            val nowTs = nextMessageTimestamp()
             val userBubble = ChatMessage(
                 id = "local_u_${UUID.randomUUID()}",
                 role = "user",
                 content = prepared.displaySummary,
+                timestamp = nowTs,
             )
-            _uiState.update { s ->
-                val insertIdx = activeAssistantMsgId?.let { aid ->
-                    s.messages.indexOfFirst { it.id == aid && it.isStreaming }
-                } ?: -1
-                val updatedMsgs = if (insertIdx >= 0) {
-                    s.messages.toMutableList().apply { add(insertIdx, userBubble) }
+            val aid = activeAssistantMsgId
+            val insertIdx = aid?.let { id ->
+                _uiState.value.messages.indexOfFirst { it.id == id && it.isStreaming }
+            } ?: -1
+            if (insertIdx >= 0) {
+                val activeAssistant = _uiState.value.messages[insertIdx]
+                if (activeAssistant.content.isNotBlank()) {
+                    splitStreamPrefix = activeAssistant.content
+                    val nextAid = "local_a_${UUID.randomUUID()}"
+                    activeAssistantMsgId = nextAid
+                    val nextAssistant = ChatMessage(
+                        id = nextAid,
+                        role = "assistant",
+                        content = "",
+                        timestamp = nowTs + 0.001,
+                        isStreaming = true,
+                    )
+                    _uiState.update { s ->
+                        val updatedMsgs = s.messages.toMutableList().apply {
+                            val idx = indexOfFirst { it.id == aid }.takeIf { it >= 0 } ?: insertIdx
+                            this[idx] = this[idx].copy(isStreaming = false)
+                            add(idx + 1, userBubble)
+                            add(idx + 2, nextAssistant)
+                        }
+                        s.copy(
+                            draft = "",
+                            pendingAttachments = emptyList(),
+                            messages = updatedMsgs,
+                            scrollToBottomTick = s.scrollToBottomTick + 1,
+                        )
+                    }
                 } else {
-                    s.messages + userBubble
+                    _uiState.update { s ->
+                        val idx = s.messages.indexOfFirst { it.id == aid }.takeIf { it >= 0 } ?: insertIdx
+                        val updatedMsgs = s.messages.toMutableList().apply { add(idx, userBubble) }
+                        s.copy(
+                            draft = "",
+                            pendingAttachments = emptyList(),
+                            messages = updatedMsgs,
+                            scrollToBottomTick = s.scrollToBottomTick + 1,
+                        )
+                    }
                 }
-                s.copy(
-                    draft = "",
-                    pendingAttachments = emptyList(),
-                    messages = updatedMsgs,
-                )
+            } else {
+                _uiState.update { s ->
+                    s.copy(
+                        draft = "",
+                        pendingAttachments = emptyList(),
+                        messages = s.messages + userBubble,
+                        scrollToBottomTick = s.scrollToBottomTick + 1,
+                    )
+                }
             }
 
             val runId = _uiState.value.activeRunId
@@ -845,12 +1040,6 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     val accepted = repository.steerRun(runId, prepared.finalMessage)
                     if (accepted) {
-                        val preview = text.ifBlank { "已补充附件指令" }.take(40)
-                        _uiState.update { s ->
-                            s.copy(
-                                toolActivities = (s.toolActivities + ToolActivity("补充指令", "info", preview)).takeLast(6),
-                            )
-                        }
                         return@launch
                     }
                 } catch (e: Exception) {
@@ -890,11 +1079,28 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         val assistantMsgId = "local_a_${UUID.randomUUID()}"
         activeAssistantMsgId = assistantMsgId
+        splitStreamPrefix = ""
+        val baseTs = nextMessageTimestamp()
         val newMessages = buildList {
             if (userDisplaySummary != null) {
-                add(ChatMessage(id = "local_u_${UUID.randomUUID()}", role = "user", content = userDisplaySummary))
+                add(
+                    ChatMessage(
+                        id = "local_u_${UUID.randomUUID()}",
+                        role = "user",
+                        content = userDisplaySummary,
+                        timestamp = baseTs,
+                    ),
+                )
             }
-            add(ChatMessage(id = assistantMsgId, role = "assistant", content = "", isStreaming = true))
+            add(
+                ChatMessage(
+                    id = assistantMsgId,
+                    role = "assistant",
+                    content = "",
+                    timestamp = baseTs + 0.001,
+                    isStreaming = true,
+                ),
+            )
         }
         _uiState.update {
             it.copy(
@@ -903,6 +1109,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 toolActivities = emptyList(),
                 pendingApproval = null,
                 messages = it.messages + newMessages,
+                scrollToBottomTick = it.scrollToBottomTick + 1,
             )
         }
 
@@ -919,13 +1126,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                                     _uiState.update { it.copy(queuedFollowUpCount = deferredFollowUps.size) }
                                     val steered = runCatching { repository.steerRun(rid, head.finalMessage) }
                                         .getOrDefault(false)
-                                    if (steered) {
-                                        _uiState.update { s ->
-                                            s.copy(
-                                                toolActivities = (s.toolActivities + ToolActivity("补充指令", "info", head.finalMessage.take(40))).takeLast(6),
-                                            )
-                                        }
-                                    } else {
+                                    if (!steered) {
                                         deferredFollowUps.addFirst(head)
                                         _uiState.update { it.copy(queuedFollowUpCount = deferredFollowUps.size) }
                                         break
@@ -935,30 +1136,17 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     is ChatStreamEvent.AssistantDelta -> {
+                        val targetId = activeAssistantMsgId ?: assistantMsgId
                         _uiState.update { s ->
                             s.copy(
                                 messages = s.messages.map { m ->
-                                    if (m.id == assistantMsgId) m.copy(content = m.content + event.delta) else m
+                                    if (m.id == targetId) m.copy(content = m.content + event.delta) else m
                                 },
                             )
                         }
                     }
-                    is ChatStreamEvent.AssistantCommentary -> {
-                        if (event.text.isNotBlank()) {
-                            _uiState.update { s ->
-                                s.copy(
-                                    toolActivities = (s.toolActivities + ToolActivity("思考", "info", event.text)).takeLast(6),
-                                )
-                            }
-                        }
-                    }
-                    is ChatStreamEvent.ToolProgress -> {
-                        _uiState.update { s ->
-                            val activity = ToolActivity(event.toolName, event.eventType, event.preview)
-                            val updated = (s.toolActivities.filterNot { it.name == event.toolName && it.status == "tool.started" } + activity).takeLast(6)
-                            s.copy(toolActivities = updated)
-                        }
-                    }
+                    is ChatStreamEvent.AssistantCommentary -> Unit
+                    is ChatStreamEvent.ToolProgress -> Unit
                     is ChatStreamEvent.ApprovalNeeded -> _uiState.update { it.copy(pendingApproval = event.request) }
                     is ChatStreamEvent.AssistantCompleted -> {
                         val pending = event.pendingSteer?.takeIf { it.isNotBlank() }
@@ -966,26 +1154,43 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                             deferredFollowUps.addLast(PendingFollowUp(pending, emptyList()))
                             _uiState.update { it.copy(queuedFollowUpCount = deferredFollowUps.size) }
                         }
+                        val targetId = activeAssistantMsgId ?: assistantMsgId
+                        val strippedContent = if (splitStreamPrefix.isNotEmpty() && event.content.startsWith(splitStreamPrefix)) {
+                            event.content.removePrefix(splitStreamPrefix).trimStart()
+                        } else {
+                            event.content
+                        }
                         _uiState.update { s ->
-                            s.copy(
-                                messages = s.messages.map { m ->
-                                    if (m.id == assistantMsgId) {
-                                        m.copy(content = event.content.ifBlank { m.content }, isStreaming = false)
+                            val existingTargetContent = s.messages.firstOrNull { it.id == targetId }?.content.orEmpty()
+                            val updated = if (targetId != assistantMsgId && strippedContent.isBlank() && existingTargetContent.isBlank()) {
+                                s.messages.filterNot { it.id == targetId }
+                            } else {
+                                s.messages.map { m ->
+                                    if (m.id == targetId) {
+                                        m.copy(content = strippedContent.ifBlank { m.content }, isStreaming = false)
                                     } else m
-                                },
-                            )
+                                }
+                            }
+                            s.copy(messages = updated)
                         }
                     }
                     is ChatStreamEvent.Error -> showNotice(event.message, isError = true)
                     ChatStreamEvent.Done -> {
+                        val targetId = activeAssistantMsgId ?: assistantMsgId
                         _uiState.update { s ->
+                            val existingTargetContent = s.messages.firstOrNull { it.id == targetId }?.content.orEmpty()
+                            val updated = if (targetId != assistantMsgId && existingTargetContent.isBlank()) {
+                                s.messages.filterNot { it.id == targetId }
+                            } else {
+                                s.messages.map { m ->
+                                    if (m.id == targetId || m.isStreaming) m.copy(isStreaming = false) else m
+                                }
+                            }
                             s.copy(
                                 streaming = false,
                                 activeRunId = null,
                                 pendingApproval = null,
-                                messages = s.messages.map { m ->
-                                    if (m.id == assistantMsgId) m.copy(isStreaming = false) else m
-                                },
+                                messages = updated,
                             )
                         }
                     }
@@ -994,17 +1199,25 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
             if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
         } finally {
-            if (activeAssistantMsgId == assistantMsgId) {
+            val targetId = activeAssistantMsgId ?: assistantMsgId
+            if (activeAssistantMsgId == targetId) {
                 activeAssistantMsgId = null
             }
+            splitStreamPrefix = ""
             _uiState.update { s ->
+                val existingTargetContent = s.messages.firstOrNull { it.id == targetId }?.content.orEmpty()
+                val updated = if (targetId != assistantMsgId && existingTargetContent.isBlank()) {
+                    s.messages.filterNot { it.id == targetId }
+                } else {
+                    s.messages.map { m ->
+                        if (m.id == targetId || m.isStreaming) m.copy(isStreaming = false) else m
+                    }
+                }
                 s.copy(
                     streaming = false,
                     activeRunId = null,
                     pendingApproval = null,
-                    messages = s.messages.map { m ->
-                        if (m.id == assistantMsgId) m.copy(isStreaming = false) else m
-                    },
+                    messages = updated,
                 )
             }
             refreshAnalytics()
@@ -1390,7 +1603,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             return when (code) {
                 "invalid_credentials" -> "账号或密码错误"
                 "unauthorized" -> "登录状态已失效，请重新登录"
-                "hermes_unreachable" -> "无法连接到服务器上的 Hermes，请检查 hermes-gateway 状态"
+                "hermes_unreachable" -> "无法连接到服务器上的小洛服务，请检查 hermes-gateway 状态"
                 "release_not_found" -> "服务器还没有发布安装包"
                 else -> "请求失败 ($code)"
             }

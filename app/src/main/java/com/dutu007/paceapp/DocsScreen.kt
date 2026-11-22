@@ -172,7 +172,7 @@ fun DocsScreen(
                             "note" to "笔记",
                             "diary" to "日记",
                             "upload" to "文档附件",
-                            "memory" to "Hermes记忆",
+                            "memory" to "小洛记忆",
                             "data" to "数据文件",
                         ).forEach { (cat, label) ->
                             FilterChip(
@@ -208,7 +208,7 @@ fun DocsScreen(
                             ) {
                                 Text("没有匹配的文档", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    "这里实时同步服务器 personal-assistant/data 中的笔记、日记和 Hermes 记忆。",
+                                    "这里实时同步服务器 personal-assistant/data 中的笔记、日记和小洛记忆。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = PacePalette.TextSecondary,
                                 )
@@ -467,7 +467,7 @@ fun DocDetailOverlay(
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     ) {
-                        Text("让 Hermes 整理展示", style = MaterialTheme.typography.labelSmall)
+                        Text("让小洛整理展示", style = MaterialTheme.typography.labelSmall)
                     }
                 }
 

@@ -2,6 +2,7 @@ package com.dutu007.paceapp.data
 
 import android.content.Context
 import com.dutu007.paceapp.BuildConfig
+import com.dutu007.paceapp.cleanDisplayUserMessage
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.android.Android
@@ -509,9 +510,10 @@ class PaceRepository(context: Context) {
         }.bodyChecked<MessageListDto>()
         val seenIds = mutableMapOf<String, Int>()
         val items = dto.data.mapNotNull { msg ->
-            if (msg.role == "system") return@mapNotNull null
-            val text = extractContentText(msg.content)
-            if (text.isBlank() && msg.role != "assistant") return@mapNotNull null
+            if (msg.role == "system" || msg.role == "tool") return@mapNotNull null
+            val rawText = extractContentText(msg.content)
+            val text = if (msg.role == "user") cleanDisplayUserMessage(rawText) else rawText
+            if (text.isBlank()) return@mapNotNull null
             val explicitId = msg.id?.let { if (it is JsonPrimitive) it.contentOrNull else null }?.takeIf { it.isNotBlank() }
             val baseId = explicitId ?: "m_${msg.timestamp?.toString().orEmpty()}_${msg.role}_${text.hashCode()}"
             val occ = seenIds.getOrDefault(baseId, 0)

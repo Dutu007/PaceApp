@@ -940,7 +940,7 @@ private fun GraphNodeInspectSheet(
                     onClick = { onAskHermes(node) },
                     modifier = Modifier.weight(1.25f),
                 ) {
-                    Text("让 Hermes 分析")
+                    Text("让小洛分析")
                 }
             }
         }

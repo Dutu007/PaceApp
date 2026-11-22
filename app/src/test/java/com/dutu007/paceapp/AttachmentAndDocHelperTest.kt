@@ -1,5 +1,7 @@
 package com.dutu007.paceapp
 
+import com.dutu007.paceapp.data.ChatMessage
+import com.dutu007.paceapp.data.PushNotificationItem
 import com.dutu007.paceapp.push.parseConnectedLatestId
 import com.dutu007.paceapp.push.parsePushSseNotification
 import com.dutu007.paceapp.widget.computeNormalizedBarRatios
@@ -258,5 +260,96 @@ class AttachmentAndDocHelperTest {
         assertEquals("coros", item.category)
         assertEquals(42L, parseConnectedLatestId("""{"status":"ok","latest_id":42,"unread_count":1}"""))
         assertNull(parsePushSseNotification("""{"id":0,"body":"invalid"}"""))
+    }
+
+    @Test
+    fun cleansOutOfBandSteerMarkerAndProactiveContext() {
+        val rawSteer = """
+            [OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]
+            顺便把睡眠表格也发我
+            [/OUT-OF-BAND USER MESSAGE]
+        """.trimIndent()
+        assertEquals("顺便把睡眠表格也发我", cleanDisplayUserMessage(rawSteer))
+
+        val rawWithProactive = """
+            [PACE_PROACTIVE_CONTEXT]
+            小洛刚刚主动推送给用户的提醒：
+            **COROS 每日同步**
+
+            昨晚睡了 8 小时
+            [/PACE_PROACTIVE_CONTEXT]
+
+            帮我看下睡眠评分趋势
+        """.trimIndent()
+        assertEquals("帮我看下睡眠评分趋势", cleanDisplayUserMessage(rawWithProactive))
+
+        val (cleanChipText, _) = extractChatAttachmentChips(rawSteer)
+        assertEquals("顺便把睡眠表格也发我", cleanChipText)
+    }
+
+    @Test
+    fun mergesProactiveNotificationsAndFiltersToolMessages() {
+        val sessionMsgs = listOf(
+            ChatMessage(id = "u1", role = "user", content = "早上好", timestamp = 1795340000.0),
+            ChatMessage(id = "a_blank", role = "assistant", content = "", timestamp = 1795340001.0, isStreaming = false),
+            ChatMessage(id = "t1", role = "tool", content = "tool raw output", toolName = "terminal", timestamp = 1795340002.0),
+            ChatMessage(id = "a1", role = "assistant", content = "早，今天有什么安排？", timestamp = 1795340005.0),
+            ChatMessage(id = "u2", role = "user", content = "中午呢", timestamp = 1795350000.0),
+            ChatMessage(id = "a2", role = "assistant", content = "收到。", timestamp = 1795350005.0),
+        )
+        val notifications = listOf(
+            PushNotificationItem(
+                id = 10L,
+                title = "COROS 每日同步",
+                body = "昨晚睡了 8h 03m，评分 77",
+                category = "coros",
+                sessionId = "",
+                isRead = true,
+                createdAt = "2026-11-22T09:00:00Z",
+            ),
+            PushNotificationItem(
+                id = 11L,
+                title = "其他会话提醒",
+                body = "仅限另一会话",
+                category = "reminder",
+                sessionId = "other_session",
+                isRead = false,
+                createdAt = "2026-11-22T09:05:00Z",
+            ),
+        )
+        val tPush = parseIsoEpochSeconds("2026-11-22T09:00:00Z")!!
+        val bracketedMsgs = listOf(
+            sessionMsgs[0].copy(timestamp = tPush - 600.0),
+            sessionMsgs[1],
+            sessionMsgs[2],
+            sessionMsgs[3].copy(timestamp = tPush - 595.0),
+            sessionMsgs[4].copy(timestamp = tPush + 600.0),
+            sessionMsgs[5].copy(timestamp = tPush + 605.0),
+        )
+
+        val merged = mergeChatAndProactiveMessages(
+            sessionMessages = bracketedMsgs,
+            notifications = notifications,
+            activeSessionId = "sess_latest",
+            isLatestSession = true,
+            liveNotificationIds = setOf(10L),
+        )
+
+        // Should exclude blank assistant turn (a_blank), tool msg (t1), and other_session push (id=11)
+        assertEquals(5, merged.size)
+        assertEquals(listOf("u1", "a1", "push_10", "u2", "a2"), merged.map { it.id })
+        assertTrue(merged[2].isProactive)
+        assertTrue(merged[2].content.contains("COROS 每日同步"))
+        assertTrue(merged[2].content.contains("昨晚睡了 8h 03m，评分 77"))
+
+        // Fresh empty session should NOT pull in already-read notifications unless in liveNotificationIds
+        val freshMerged = mergeChatAndProactiveMessages(
+            sessionMessages = emptyList(),
+            notifications = notifications,
+            activeSessionId = "new_sess",
+            isLatestSession = true,
+            liveNotificationIds = emptySet(),
+        )
+        assertTrue(freshMerged.isEmpty())
     }
 }

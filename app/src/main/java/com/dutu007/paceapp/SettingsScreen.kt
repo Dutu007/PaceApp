@@ -376,7 +376,7 @@ fun SettingsScreen(
 
                 item {
                     SettingsRow(
-                        title = "Hermes 服务状态",
+                        title = "小洛服务状态",
                         subtitle = "$hermesStatus · ${BuildConfig.API_BASE_URL}",
                         onClick = viewModel::refreshAll,
                     )
@@ -406,7 +406,7 @@ fun SettingsScreen(
                 item {
                     val connSummary = when (state.pushConnectionState) {
                         PushConnectionState.CONNECTED -> "已在线 · 保持长连接可秒级接收主动提醒"
-                        PushConnectionState.CONNECTING -> "连接中... · 正在建立 SSE 推送通道"
+                        PushConnectionState.CONNECTING -> "连接中... · 正在建立实时连接"
                         PushConnectionState.DISCONNECTED -> "已断开 · 网络恢复后自动重连"
                         PushConnectionState.DISABLED -> "已关闭 · 仅通过后台周期同步拉取提醒"
                     }
@@ -443,7 +443,7 @@ fun SettingsScreen(
                                         text = if (hasNotifPermission) {
                                             "已授权 · 点击可调整系统通知渠道"
                                         } else {
-                                            "未授权 · 点击开启以接收 Hermes 提醒弹窗"
+                                            "未授权 · 点击开启以接收小洛提醒弹窗"
                                         },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -471,7 +471,7 @@ fun SettingsScreen(
                                     verticalArrangement = Arrangement.spacedBy(2.dp),
                                 ) {
                                     Text(
-                                        text = "Hermes 随时在线长连接（方案 A）",
+                                        text = "小洛随时在线长连接",
                                         style = MaterialTheme.typography.titleSmall,
                                         color = MaterialTheme.colorScheme.onSurface,
                                     )

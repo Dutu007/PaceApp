@@ -78,7 +78,7 @@ fun LoginScreen(
                     }
                     Column {
                         Text("Pace", style = MaterialTheme.typography.titleLarge, color = PacePalette.TextPrimary)
-                        Text("Hermes 对话 · 随手记 · 同步文档", style = MaterialTheme.typography.bodySmall, color = PacePalette.TextSecondary)
+                        Text("小洛对话 · 随手记 · 同步文档", style = MaterialTheme.typography.bodySmall, color = PacePalette.TextSecondary)
                     }
                 }
 

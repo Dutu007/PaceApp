@@ -108,6 +108,20 @@ fun encodePaceLocalMarkdown(label: String, uriString: String, isImage: Boolean):
     return "[$prefix$cleanLabel](pace-local://$encodedUri)"
 }
 
+private val OutOfBandSteerOpenRegex = Regex("""^\[OUT-OF-BAND USER MESSAGE[^\]]*\]\r?\n?""")
+private val OutOfBandSteerCloseRegex = Regex("""\r?\n?\[/OUT-OF-BAND USER MESSAGE\]\s*$""")
+private val PaceProactiveContextRegex = Regex("""^\[PACE_PROACTIVE_CONTEXT\][\s\S]*?\[/PACE_PROACTIVE_CONTEXT\]\s*""")
+
+fun cleanDisplayUserMessage(raw: String): String {
+    var cleaned = raw.trim()
+    cleaned = PaceProactiveContextRegex.replace(cleaned, "").trim()
+    if (cleaned.startsWith("[OUT-OF-BAND USER MESSAGE")) {
+        cleaned = OutOfBandSteerOpenRegex.replaceFirst(cleaned, "")
+        cleaned = OutOfBandSteerCloseRegex.replaceFirst(cleaned, "")
+    }
+    return cleaned.trim()
+}
+
 fun extractChatAttachmentChips(rawContent: String): Pair<String, List<ChatAttachmentChip>> {
     val chipsByKey = linkedMapOf<String, ChatAttachmentChip>()
 
@@ -118,7 +132,8 @@ fun extractChatAttachmentChips(rawContent: String): Pair<String, List<ChatAttach
         }
     }
 
-    val firstPass = PaceDocLinkRegex.replace(rawContent) { match ->
+    val normalizedContent = cleanDisplayUserMessage(rawContent)
+    val firstPass = PaceDocLinkRegex.replace(normalizedContent) { match ->
         val rawLabel = match.groupValues[1].trim()
         val url = match.groupValues[2]
         val isImage = rawLabel.startsWith("🖼") || isImageFileName(rawLabel)
@@ -425,7 +440,7 @@ fun InAppDocumentViewerDialog(
                         errorMsg = "无法读取本地 PDF 文件"
                     }
                 } else {
-                    textContent = "本地文件：${target.title}\n\n发送给 Hermes 后会自动上传并解析正文，也可直接点击上方「用其他应用打开」查看完整文档。"
+                    textContent = "本地文件：${target.title}\n\n发送给小洛后会自动上传并解析正文，也可直接点击上方「用其他应用打开」查看完整文档。"
                 }
                 loading = false
             }
@@ -629,7 +644,7 @@ fun InAppDocumentViewerDialog(
                                     onDismiss()
                                 },
                                 modifier = Modifier.weight(1.4f),
-                            ) { Text("让 Hermes 分析文档") }
+                            ) { Text("让小洛分析文档") }
                         }
                     }
                 }

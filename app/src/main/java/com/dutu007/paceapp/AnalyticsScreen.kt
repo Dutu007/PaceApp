@@ -435,7 +435,7 @@ private fun LabHeroCard(
                 }
             } else {
                 Text(
-                    text = "单源同步 data/lab/sessions.json，对话告知 Hermes 到达/离开也会自动累计到此处。",
+                    text = "单源同步 data/lab/sessions.json，对话告知小洛到达/离开也会自动累计到此处。",
                     style = MaterialTheme.typography.bodySmall,
                     color = PacePalette.TextSecondary,
                 )
@@ -609,7 +609,7 @@ private fun LabAnalyticsCard(
                     )
                 }
                 TextButton(onClick = onAskHermes, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Text("让 Hermes 分析", fontSize = 12.sp)
+                    Text("让小洛分析", fontSize = 12.sp)
                 }
             }
 
@@ -746,7 +746,7 @@ private fun SleepAnalyticsCard(
                             color = PacePalette.TextPrimary,
                         )
                         Text(
-                            "接入方式：\n1) 对 Hermes 说“昨晚 23:40 睡，今早 07:35 起”自动归档；\n2) 后续手表数据通过 Webhook / 导入写入同份 JSON（含深浅睡、REM 与睡眠评分）。",
+                            "接入方式：\n1) 对小洛说“昨晚 23:40 睡，今早 07:35 起”自动归档；\n2) 后续手表数据通过 Webhook / 导入写入同份 JSON（含深浅睡、REM 与睡眠评分）。",
                             style = MaterialTheme.typography.labelSmall,
                             color = PacePalette.TextSecondary,
                         )
@@ -1832,7 +1832,7 @@ private fun RunningAnalyticsCard(
 
             if (running.recentRuns.isEmpty()) {
                 Text(
-                    "暂无跑步记录，可上传运动截图给 Hermes 或写入 running/records.json。",
+                    "暂无跑步记录，可上传运动截图给小洛或写入 running/records.json。",
                     style = MaterialTheme.typography.bodySmall,
                     color = PacePalette.TextSecondary,
                 )
@@ -2326,14 +2326,14 @@ private fun SleepManualEntrySheet(
 private fun AnalyticsSpecDialog(onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Hermes + PaceApp 数据规范") },
+        title = { Text("小洛 + PaceApp 数据规范") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    "已与 Hermes Skill（lab-time-tracking / personal-metrics-spec）约定单一 JSON 数据源，不生成重复文档：",
+                    "已与小洛 Skill（lab-time-tracking / personal-metrics-spec）约定单一 JSON 数据源，不生成重复文档：",
                     style = MaterialTheme.typography.bodySmall,
                     color = PacePalette.TextPrimary,
                 )
