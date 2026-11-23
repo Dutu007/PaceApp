@@ -7,8 +7,10 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Switch
+import androidx.compose.runtime.LaunchedEffect
 import com.dutu007.paceapp.push.PaceNotificationHelper
 import com.dutu007.paceapp.push.PushConnectionState
 
@@ -285,6 +287,9 @@ fun SettingsScreen(
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(Unit) {
+        viewModel.refreshProactiveConfig()
+    }
     var ignoringBattery by remember { mutableStateOf(OriginOsKeepAliveHelper.isIgnoringBatteryOptimizations(context)) }
     var lastWidgetSync by remember(state.analytics) { mutableStateOf(WidgetDataStore.lastSyncFormatted(context)) }
     var hasNotifPermission by remember { mutableStateOf(PaceNotificationHelper.hasNotificationPermission(context)) }
@@ -490,6 +495,175 @@ fun SettingsScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp),
                                 color = MaterialTheme.colorScheme.outlineVariant,
                             )
+                            val cfg = state.proactiveConfig
+                            val moodLabel = when (cfg.todayMood) {
+                                "energetic" -> "活跃"
+                                "strict" -> "严厉督学日"
+                                "quiet" -> "安静少打扰"
+                                else -> "温和陪伴"
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = "小洛自主冒泡",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = if (cfg.enabled) {
+                                            "今日 $moodLabel · 已冒泡 ${cfg.sentToday}/${cfg.todayBudget} 次 · 夜间 ${cfg.quietStart}-${cfg.quietEnd} 静默"
+                                        } else {
+                                            "已关闭 · 仅保留 COROS 每日同步提醒"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Switch(
+                                    checked = cfg.enabled,
+                                    enabled = !state.proactiveBusy,
+                                    onCheckedChange = { viewModel.updateProactiveConfig(enabled = it) },
+                                )
+                            }
+                            if (cfg.enabled) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp)
+                                        .padding(bottom = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text(
+                                        text = "冒泡节奏（每天随机波动，不按固定闹钟响）",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        listOf(
+                                            "quiet" to "偏安静",
+                                            "balanced" to "适中·多变",
+                                            "lively" to "活泼粘人",
+                                        ).forEach { (key, label) ->
+                                            FilterChip(
+                                                selected = cfg.intensity == key,
+                                                enabled = !state.proactiveBusy,
+                                                onClick = { viewModel.updateProactiveConfig(intensity = key) },
+                                                label = { Text(label, fontSize = 12.sp) },
+                                            )
+                                        }
+                                    }
+                                }
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    color = MaterialTheme.colorScheme.outlineVariant,
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        Text(
+                                            text = "严厉督学模式",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                        Text(
+                                            text = "检测到熬夜、摸鱼久不去实验室或久不运动时严厉提醒",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Switch(
+                                        checked = cfg.strictSupervision,
+                                        enabled = !state.proactiveBusy,
+                                        onCheckedChange = { viewModel.updateProactiveConfig(strictSupervision = it) },
+                                    )
+                                }
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    color = MaterialTheme.colorScheme.outlineVariant,
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        Text(
+                                            text = "实验室专注期免闲聊",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                        Text(
+                                            text = "打卡学习中默认安静陪伴，签退后或久坐超 3 小时再开口",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Switch(
+                                        checked = cfg.labFocusProtect,
+                                        enabled = !state.proactiveBusy,
+                                        onCheckedChange = { viewModel.updateProactiveConfig(labFocusProtect = it) },
+                                    )
+                                }
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !state.proactiveBusy) { viewModel.triggerProactiveBubbleNow() }
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = "让小洛现在冒个泡",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = if (state.proactiveBusy) "小洛正在想说什么好..." else "结合当前作息、学习与最近对话立即生成一条冒泡消息",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Text(
+                                    text = if (state.proactiveBusy) "思考中" else "试一下",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -529,6 +703,41 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 4.dp, top = 4.dp),
                     )
+                }
+
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 18.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = "隐藏最近任务卡片",
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = "退回桌面后在多任务界面隐藏 Pace 窗口，防止顺手划掉；可从桌面图标、原子组件或通知回到应用",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = state.hideFromRecents,
+                                onCheckedChange = viewModel::toggleHideFromRecents,
+                            )
+                        }
+                    }
                 }
 
                 item {

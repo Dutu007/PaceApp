@@ -111,6 +111,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PacePushPrefs.applyExcludeFromRecents(this, PacePushPrefs.isHideFromRecents(this))
         pendingOpenTab = intent?.getStringExtra(EXTRA_OPEN_TAB)
         pendingNotificationId = intent?.getLongExtra(EXTRA_OPEN_NOTIFICATION_ID, 0L) ?: 0L
         val transparent = Color.Transparent.toArgb()
@@ -128,6 +129,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        PacePushPrefs.applyExcludeFromRecents(this, PacePushPrefs.isHideFromRecents(this))
     }
 
     override fun onNewIntent(intent: Intent) {

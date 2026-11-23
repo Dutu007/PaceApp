@@ -242,6 +242,33 @@ private data class NotificationPageDto(
 )
 
 @Serializable
+private data class ProactiveConfigDto(
+    val enabled: Boolean = true,
+    val intensity: String = "balanced",
+    @SerialName("quiet_start") val quietStart: String = "23:30",
+    @SerialName("quiet_end") val quietEnd: String = "08:30",
+    @SerialName("lab_focus_protect") val labFocusProtect: Boolean = true,
+    @SerialName("strict_supervision") val strictSupervision: Boolean = true,
+    @SerialName("today_date") val todayDate: String = "",
+    @SerialName("today_budget") val todayBudget: Int = 0,
+    @SerialName("today_mood") val todayMood: String = "",
+    @SerialName("sent_today") val sentToday: Int = 0,
+    @SerialName("last_sent_at") val lastSentAt: String? = null,
+    @SerialName("next_eval_at") val nextEvalAt: String? = null,
+)
+
+@Serializable
+private data class ProactiveTriggerRequestDto(val force: Boolean = true)
+
+@Serializable
+private data class ProactiveTriggerResponseDto(
+    val sent: Boolean = false,
+    val reason: String = "",
+    val notification: PushNotificationDto? = null,
+    val state: ProactiveConfigDto? = null,
+)
+
+@Serializable
 private data class SttRefineRequestDto(
     val text: String,
     val candidates: List<String> = emptyList(),
@@ -1060,6 +1087,63 @@ class PaceRepository(context: Context) {
         val dto = client.post("$baseUrl/api/v1/push/test") { auth() }.bodyChecked<PushNotificationDto>()
         return dto.toDomain()
     }
+
+    suspend fun getProactiveConfig(): ProactiveConfig {
+        val dto = client.get("$baseUrl/api/v1/proactive/config") { auth() }.bodyChecked<ProactiveConfigDto>()
+        return dto.toDomain()
+    }
+
+    suspend fun updateProactiveConfig(
+        enabled: Boolean? = null,
+        intensity: String? = null,
+        quietStart: String? = null,
+        quietEnd: String? = null,
+        labFocusProtect: Boolean? = null,
+        strictSupervision: Boolean? = null,
+    ): ProactiveConfig {
+        val body = buildJsonObject {
+            enabled?.let { put("enabled", it) }
+            intensity?.let { put("intensity", it) }
+            quietStart?.let { put("quiet_start", it) }
+            quietEnd?.let { put("quiet_end", it) }
+            labFocusProtect?.let { put("lab_focus_protect", it) }
+            strictSupervision?.let { put("strict_supervision", it) }
+        }
+        val dto = client.patch("$baseUrl/api/v1/proactive/config") {
+            auth()
+            contentType(ContentType.Application.Json)
+            setBody(body.toString())
+        }.bodyChecked<ProactiveConfigDto>()
+        return dto.toDomain()
+    }
+
+    suspend fun triggerProactiveNow(force: Boolean = true): ProactiveTriggerResult {
+        val dto = client.post("$baseUrl/api/v1/proactive/trigger") {
+            auth()
+            jsonBody(ProactiveTriggerRequestDto(force = force))
+        }.bodyChecked<ProactiveTriggerResponseDto>()
+        return ProactiveTriggerResult(
+            sent = dto.sent,
+            reason = dto.reason,
+            notification = dto.notification?.toDomain(),
+            state = dto.state?.toDomain(),
+        )
+    }
+
+    private fun ProactiveConfigDto.toDomain() = ProactiveConfig(
+        enabled = enabled,
+        intensity = intensity,
+        quietStart = quietStart,
+        quietEnd = quietEnd,
+        labFocusProtect = labFocusProtect,
+        strictSupervision = strictSupervision,
+        todayDate = todayDate,
+        todayBudget = todayBudget,
+        todayMood = todayMood,
+        sentToday = sentToday,
+        lastSentAt = lastSentAt.orEmpty(),
+        nextEvalAt = nextEvalAt.orEmpty(),
+    )
 
     private fun PushNotificationDto.toDomain() = PushNotificationItem(
         id = id,

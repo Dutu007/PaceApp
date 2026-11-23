@@ -124,10 +124,11 @@ const sttRefineSystemPrompt = `你是中文语音识别（ASR）后处理纠错�
 5. 只输出修正后的纯文本结果。`
 
 type llmClient struct {
-	baseURL string
-	apiKey  string
-	model   string
-	http    *http.Client
+	baseURL  string
+	apiKey   string
+	model    string
+	http     *http.Client
+	chatHTTP *http.Client
 }
 
 func newLLMClient(baseURL, apiKey, model string) *llmClient {
@@ -147,10 +148,11 @@ func newLLMClient(baseURL, apiKey, model string) *llmClient {
 		m = "deepseek-chat"
 	}
 	return &llmClient{
-		baseURL: base,
-		apiKey:  key,
-		model:   m,
-		http:    &http.Client{Timeout: 8 * time.Second},
+		baseURL:  base,
+		apiKey:   key,
+		model:    m,
+		http:     &http.Client{Timeout: 8 * time.Second},
+		chatHTTP: &http.Client{Timeout: 25 * time.Second},
 	}
 }
 
@@ -226,6 +228,67 @@ func (c *llmClient) refineSpeech(ctx context.Context, primary string, candidates
 		return primary, false
 	}
 	return out, true
+}
+
+func (c *llmClient) completeChat(ctx context.Context, systemPrompt, userPrompt string, temperature float64, maxTokens int, jsonMode bool) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("llm_not_configured")
+	}
+	client := c.chatHTTP
+	if client == nil {
+		client = &http.Client{Timeout: 25 * time.Second}
+	}
+	reqPayload := map[string]any{
+		"model": c.model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
+		},
+		"temperature": temperature,
+		"max_tokens":  maxTokens,
+	}
+	if jsonMode {
+		reqPayload["response_format"] = map[string]string{"type": "json_object"}
+	}
+	encoded, err := json.Marshal(reqPayload)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(encoded))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("llm_upstream_%d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Choices) == 0 {
+		return "", fmt.Errorf("llm_empty_response")
+	}
+	out := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	if out == "" {
+		return "", fmt.Errorf("llm_empty_content")
+	}
+	return out, nil
 }
 
 func (s *server) refineStt(w http.ResponseWriter, r *http.Request) {

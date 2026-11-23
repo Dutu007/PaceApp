@@ -20,6 +20,7 @@ import com.dutu007.paceapp.data.DocSummary
 import com.dutu007.paceapp.data.KnowledgeGraphData
 import com.dutu007.paceapp.data.PaceRepository
 import com.dutu007.paceapp.data.PendingAttachment
+import com.dutu007.paceapp.data.ProactiveConfig
 import com.dutu007.paceapp.data.PushNotificationItem
 import com.dutu007.paceapp.data.SessionItem
 import com.dutu007.paceapp.data.ToolActivity
@@ -71,6 +72,15 @@ fun parseIsoEpochSeconds(iso: String): Double? {
 fun formatProactiveNotificationContent(item: PushNotificationItem): String {
     val title = item.title.trim()
     val body = item.body.trim()
+    if (
+        item.category == "proactive_chat" ||
+        item.category == "proactive_strict" ||
+        title == "小洛" ||
+        title == "小洛提醒" ||
+        title == "小洛 · 督学提醒"
+    ) {
+        return body.ifBlank { title }
+    }
     return when {
         title.isBlank() -> body
         body.isBlank() -> "**$title**"
@@ -226,6 +236,9 @@ data class PaceUiState(
     val pushConnectionState: PushConnectionState = PushConnectionState.DISCONNECTED,
     val liveNotificationIds: Set<Long> = emptySet(),
     val scrollToBottomTick: Int = 0,
+    val proactiveConfig: ProactiveConfig = ProactiveConfig(),
+    val proactiveBusy: Boolean = false,
+    val hideFromRecents: Boolean = false,
 
     // Global notice & updates
     val notice: PaceNotice? = null,
@@ -307,8 +320,10 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                     user = repository.currentUser(),
                     livePushEnabled = PacePushPrefs.isLiveEnabled(appCtx),
                     pushConnectionState = PacePushPrefs.connectionState.value,
+                    hideFromRecents = PacePushPrefs.isHideFromRecents(appCtx),
                 )
             }
+            PacePushPrefs.applyExcludeFromRecents(appCtx, PacePushPrefs.isHideFromRecents(appCtx))
             PacePushService.syncServiceState(appCtx)
             refreshAll()
             checkForUpdate(manual = false)
@@ -484,8 +499,10 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                         user = user,
                         passwordInput = "",
                         livePushEnabled = PacePushPrefs.isLiveEnabled(appCtx),
+                        hideFromRecents = PacePushPrefs.isHideFromRecents(appCtx),
                     )
                 }
+                PacePushPrefs.applyExcludeFromRecents(appCtx, PacePushPrefs.isHideFromRecents(appCtx))
                 PacePushService.syncServiceState(appCtx)
                 refreshAll()
                 checkForUpdate(manual = false)
@@ -520,6 +537,7 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(hermesOnline = online) }
             loadSessionsInternal(autoSelect = true)
             refreshNotifications()
+            refreshProactiveConfig()
             refreshAnalytics()
             refreshDocs()
             refreshGraph()
@@ -527,6 +545,88 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // -- Proactive Push Notifications --
+
+    fun toggleHideFromRecents(enabled: Boolean) {
+        val appCtx = getApplication<Application>().applicationContext
+        PacePushPrefs.setHideFromRecents(appCtx, enabled)
+        _uiState.update { it.copy(hideFromRecents = enabled) }
+        showNotice(
+            if (enabled) {
+                "已隐藏最近任务卡片（退回桌面不再显示，可从图标/组件/通知进入）"
+            } else {
+                "已恢复在最近任务中显示 Pace 卡片"
+            },
+        )
+    }
+
+    fun refreshProactiveConfig() {
+        viewModelScope.launch {
+            runCatching { repository.getProactiveConfig() }
+                .onSuccess { cfg -> _uiState.update { it.copy(proactiveConfig = cfg) } }
+        }
+    }
+
+    fun updateProactiveConfig(
+        enabled: Boolean? = null,
+        intensity: String? = null,
+        quietStart: String? = null,
+        quietEnd: String? = null,
+        labFocusProtect: Boolean? = null,
+        strictSupervision: Boolean? = null,
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(proactiveBusy = true) }
+            try {
+                val cfg = repository.updateProactiveConfig(
+                    enabled = enabled,
+                    intensity = intensity,
+                    quietStart = quietStart,
+                    quietEnd = quietEnd,
+                    labFocusProtect = labFocusProtect,
+                    strictSupervision = strictSupervision,
+                )
+                _uiState.update { it.copy(proactiveBusy = false, proactiveConfig = cfg) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(proactiveBusy = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
+    fun triggerProactiveBubbleNow() {
+        if (_uiState.value.proactiveBusy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(proactiveBusy = true) }
+            try {
+                val res = repository.triggerProactiveNow(force = true)
+                _uiState.update { s ->
+                    var next = s.copy(proactiveBusy = false)
+                    res.state?.let { next = next.copy(proactiveConfig = it) }
+                    val item = res.notification
+                    if (item != null) {
+                        val merged = (listOf(item) + s.notifications.filterNot { it.id == item.id }).take(80)
+                        next = next.copy(
+                            notifications = merged,
+                            unreadNotificationCount = merged.count { !it.isRead }.toLong(),
+                            liveNotificationIds = s.liveNotificationIds + item.id,
+                            scrollToBottomTick = s.scrollToBottomTick + 1,
+                        )
+                    }
+                    next
+                }
+                res.notification?.let { item ->
+                    PaceNotificationHelper.showAlertNotification(getApplication(), item)
+                    if (_uiState.value.currentTab == PaceTab.CHAT && !item.isRead) {
+                        markNotificationRead(item.id)
+                    }
+                }
+                showNotice(if (res.sent) "小洛已冒了个泡，内容已同步到对话流" else "小洛这次选择保持安静 (${res.reason})")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(proactiveBusy = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
 
     fun refreshNotifications() {
         viewModelScope.launch {

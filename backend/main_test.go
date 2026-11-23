@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -222,7 +223,30 @@ func newTestServer(t *testing.T, hermesHandler http.HandlerFunc) (*server, *http
 		docs:          newDocStore(assistantDir, memFile),
 		apkDir:        apkDir,
 	}
+	srv.proactive = newProactiveEngine(srv, newMemoryProactiveStore())
 	return srv, upstream
+}
+
+type memoryProactiveStore struct {
+	mu sync.Mutex
+	st proactiveState
+}
+
+func newMemoryProactiveStore() *memoryProactiveStore {
+	return &memoryProactiveStore{st: defaultProactiveState()}
+}
+
+func (m *memoryProactiveStore) Get(_ context.Context) (proactiveState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.st, nil
+}
+
+func (m *memoryProactiveStore) Save(_ context.Context, st proactiveState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.st = st
+	return nil
 }
 
 func TestAuthAndHermesProxy(t *testing.T) {
@@ -1042,5 +1066,200 @@ func TestPushNotificationsAndSSEStream(t *testing.T) {
 	listResp2.Body.Close()
 	if sumPayload.UnreadCount != 0 {
 		t.Fatalf("expected unread_count=0 after read-all, got %d", sumPayload.UnreadCount)
+	}
+}
+
+func TestProactiveGuardrailsAndVariance(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	daytime := time.Date(2026, 11, 22, 15, 30, 0, 0, loc)
+	latenight := time.Date(2026, 11, 23, 2, 10, 0, 0, loc)
+
+	if !inQuietHours(latenight, "23:30", "08:30") {
+		t.Fatalf("expected 02:10 to be inside overnight quiet hours 23:30-08:30")
+	}
+	if inQuietHours(daytime, "23:30", "08:30") {
+		t.Fatalf("expected 15:30 to be outside quiet hours 23:30-08:30")
+	}
+
+	rng := rand.New(rand.NewSource(42))
+	seenLow, seenHigh := false, false
+	for i := 0; i < 80; i++ {
+		b, _ := rollDailyBudgetAndMood("balanced", time.Wednesday, rng)
+		if b <= 1 {
+			seenLow = true
+		}
+		if b >= 5 {
+			seenHigh = true
+		}
+	}
+	if !seenLow || !seenHigh {
+		t.Fatalf("expected high variance daily budgets covering <=1 and >=5, got seenLow=%v seenHigh=%v", seenLow, seenHigh)
+	}
+
+	st := defaultProactiveState()
+	st.TodayDate = "2026-11-22"
+	st.TodayBudget = 4
+
+	// Unanswered backoff >= 2 must block non-force proactive sends
+	stUnans := st
+	stUnans.UnansweredCount = 2
+	resUnans := evaluateGuardrailsAndImpulse(impulseEvalInput{
+		Now:   daytime,
+		State: stUnans,
+		Life:  proactiveLifeSnapshot{},
+	}, rng)
+	if resUnans.Allow || resUnans.BlockedBy != "unanswered_backoff" {
+		t.Fatalf("expected unanswered_backoff block, got %+v", resUnans)
+	}
+
+	// Lab active < 180m with LabFocusProtect=true must block
+	resLab := evaluateGuardrailsAndImpulse(impulseEvalInput{
+		Now:   daytime,
+		State: st,
+		Life:  proactiveLifeSnapshot{LabActive: true, LabActiveMinutes: 60},
+	}, rng)
+	if resLab.Allow || resLab.BlockedBy != "lab_focus_protect" {
+		t.Fatalf("expected lab_focus_protect block, got %+v", resLab)
+	}
+
+	// Lab active >= 180m (overwork) bypasses focus block & marks StrictReady (verified via Force or lucky roll)
+	resOverwork := evaluateGuardrailsAndImpulse(impulseEvalInput{
+		Now:   daytime,
+		State: st,
+		Life:  proactiveLifeSnapshot{LabActive: true, LabActiveMinutes: 195, OverworkSignal: true},
+		Force: true,
+	}, rng)
+	if !resOverwork.Allow || !resOverwork.StrictReady {
+		t.Fatalf("expected overwork signal to allow StrictReady, got %+v", resOverwork)
+	}
+}
+
+func TestProactiveConfigAndManualTrigger(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/sessions":
+			_, _ = w.Write([]byte(`{"data":[{"id":"sess_1","last_active":1795340000}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/sessions/sess_1/messages":
+			_, _ = w.Write([]byte(`{"data":[{"role":"user","content":"今天准备改论文","timestamp":1795340000}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	llmMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"choices":[{
+				"message":{
+					"content":"{\"speak\":true,\"mode\":\"strict_supervisor\",\"message\":\"都下午了实验室还没打卡，别磨蹭，现在就起身去工位把论文引言改完。\",\"next_sleep_minutes\":95,\"reason\":\"afternoon_no_lab\"}"
+				}
+			}]
+		}`))
+	}))
+	defer llmMock.Close()
+	srv.llm = newLLMClient(llmMock.URL, "test-deepseek-key", "deepseek-chat")
+
+	// Seed persona note and slacking lab state on disk
+	_ = os.MkdirAll(filepath.Join(srv.docs.assistantDir, "notes"), 0o755)
+	_ = os.WriteFile(filepath.Join(srv.docs.assistantDir, "notes", "小洛人设.md"), []byte("# 小洛\n严厉督学"), 0o644)
+
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+
+	token, _, err := srv.auth.issueToken(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. PATCH config
+	patchReq, _ := http.NewRequest(
+		http.MethodPatch,
+		api.URL+"/api/v1/proactive/config",
+		strings.NewReader(`{"enabled":true,"intensity":"lively","quiet_start":"23:45","quiet_end":"08:15","lab_focus_protect":false,"strict_supervision":true}`),
+	)
+	patchReq.Header.Set("Authorization", "Bearer "+token)
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchResp, err := http.DefaultClient.Do(patchReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg proactiveState
+	_ = json.NewDecoder(patchResp.Body).Decode(&cfg)
+	patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK || cfg.Intensity != "lively" || cfg.QuietStart != "23:45" || cfg.LabFocusProtect {
+		t.Fatalf("unexpected PATCH proactive/config response: status=%d cfg=%+v", patchResp.StatusCode, cfg)
+	}
+
+	// 2. GET config
+	getReq, _ := http.NewRequest(http.MethodGet, api.URL+"/api/v1/proactive/config", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 GET proactive/config, got %d", getResp.StatusCode)
+	}
+
+	// 3. Connect SSE stream, then trigger forced evaluation -> verify notification broadcasts
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sseReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, api.URL+"/api/v1/events/stream?after_id=0", nil)
+	sseReq.Header.Set("Authorization", "Bearer "+token)
+	sseResp, err := http.DefaultClient.Do(sseReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sseResp.Body.Close()
+	reader := bufio.NewReader(sseResp.Body)
+	// Drain initial connected event
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+
+	trigReq, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/proactive/trigger", strings.NewReader(`{"force":true}`))
+	trigReq.Header.Set("Authorization", "Bearer "+token)
+	trigReq.Header.Set("Content-Type", "application/json")
+	trigResp, err := http.DefaultClient.Do(trigReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trigOut struct {
+		Sent         bool              `json:"sent"`
+		Reason       string            `json:"reason"`
+		Notification *pushNotification `json:"notification"`
+	}
+	_ = json.NewDecoder(trigResp.Body).Decode(&trigOut)
+	trigResp.Body.Close()
+	if trigResp.StatusCode != http.StatusOK || !trigOut.Sent || trigOut.Notification == nil {
+		t.Fatalf("expected proactive trigger sent=true, got status=%d out=%+v", trigResp.StatusCode, trigOut)
+	}
+	if trigOut.Notification.Category != "proactive_strict" || trigOut.Notification.Title != "小洛 · 督学提醒" {
+		t.Fatalf("unexpected notification metadata: %+v", trigOut.Notification)
+	}
+
+	// Read live SSE notification frame
+	var evData string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" && evData != "" {
+			break
+		}
+		if strings.HasPrefix(line, "data:") {
+			evData = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+	}
+	if !strings.Contains(evData, "proactive_strict") {
+		t.Fatalf("expected SSE broadcast to contain proactive_strict notification, got %s", evData)
 	}
 }

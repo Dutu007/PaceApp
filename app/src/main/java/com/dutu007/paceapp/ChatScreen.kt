@@ -1141,14 +1141,20 @@ private fun MessageItem(
             XiaoluoAvatar(size = 24.dp)
             Text("小洛", style = MaterialTheme.typography.labelMedium, color = PacePalette.TextSecondary, fontWeight = FontWeight.SemiBold)
             if (message.isProactive) {
+                val isStrict = message.proactiveCategory == "proactive_strict"
+                val badgeText = when (message.proactiveCategory) {
+                    "proactive_strict" -> "督学"
+                    "proactive_chat" -> "冒泡"
+                    else -> "主动提醒"
+                }
                 Surface(
-                    color = PacePalette.PrimarySoft,
+                    color = if (isStrict) PacePalette.AccentAmberSoft else PacePalette.PrimarySoft,
                     shape = RoundedCornerShape(6.dp),
                 ) {
                     Text(
-                        text = "主动提醒",
+                        text = badgeText,
                         style = MaterialTheme.typography.labelSmall,
-                        color = PacePalette.Primary,
+                        color = if (isStrict) PacePalette.AccentAmber else PacePalette.Primary,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
                     )
                 }

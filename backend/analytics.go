@@ -1131,3 +1131,153 @@ func (s *server) upsertSleepRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, req)
 }
+
+type proactiveLifeSnapshot struct {
+	LabActive              bool
+	LabActiveMinutes       int
+	TodayLabMinutes        int
+	LabStreakDays          int
+	MinutesSinceLastLabOut int
+	HasTodaySleep          bool
+	TodaySleepMinutes      int
+	TodaySleepBedtime      string
+	TodaySleepWakeTime     string
+	TodaySleepScore        *int
+	LateBedtime            bool
+	RanToday               bool
+	TodayRunKm             float64
+	DaysSinceLastRun       int
+	SlackingSignal         bool
+	OverworkSignal         bool
+}
+
+func (d *docStore) buildLifeSnapshot(now time.Time) proactiveLifeSnapshot {
+	snap := proactiveLifeSnapshot{
+		MinutesSinceLastLabOut: -1,
+		DaysSinceLastRun:       -1,
+	}
+	if d == nil || d.assistantDir == "" {
+		return snap
+	}
+	now = now.In(d.tz)
+	todayKey := now.Format("2006-01-02")
+
+	analyticsFileMu.Lock()
+	labFile, labErr := d.loadLabLocked()
+	sleepFile, sleepErr := d.loadSleepLocked()
+	analyticsFileMu.Unlock()
+
+	if labErr == nil {
+		labDayMinutes := map[string]int{}
+		var latestOut time.Time
+		for _, rawSess := range labFile.Sessions {
+			sess := rawSess
+			if sess.Date == "" && len(sess.Arrive) >= 10 {
+				sess.Date = sess.Arrive[:10]
+			}
+			arriveTime, arrErr := parseClockInDate(sess.Date, sess.Arrive, d.tz)
+			if sess.Leave == nil || strings.TrimSpace(*sess.Leave) == "" {
+				snap.LabActive = true
+				if arrErr == nil {
+					elapsed := int(math.Round(now.Sub(arriveTime).Minutes()))
+					if elapsed > snap.LabActiveMinutes {
+						snap.LabActiveMinutes = elapsed
+					}
+				}
+				continue
+			}
+			mins := 0
+			var leaveTime time.Time
+			var hasLeave bool
+			if arrErr == nil {
+				if lt, err := parseClockInDate(sess.Date, *sess.Leave, d.tz); err == nil {
+					if lt.Before(arriveTime) {
+						lt = lt.Add(24 * time.Hour)
+					}
+					leaveTime = lt
+					hasLeave = true
+					if sess.Minutes == nil {
+						mins = int(math.Round(lt.Sub(arriveTime).Minutes()))
+					}
+				}
+			}
+			if sess.Minutes != nil {
+				mins = *sess.Minutes
+			}
+			if mins < 0 {
+				mins = 0
+			}
+			labDayMinutes[sess.Date] += mins
+			if sess.Date == todayKey {
+				snap.TodayLabMinutes += mins
+				if hasLeave && !leaveTime.After(now) && leaveTime.After(latestOut) {
+					latestOut = leaveTime
+				}
+			}
+		}
+		if snap.LabActive {
+			snap.TodayLabMinutes += snap.LabActiveMinutes
+		}
+		snap.LabStreakDays = computeStreakDays(labDayMinutes, now)
+		if !latestOut.IsZero() {
+			diff := int(math.Round(now.Sub(latestOut).Minutes()))
+			if diff >= 0 {
+				snap.MinutesSinceLastLabOut = diff
+			}
+		}
+	}
+
+	if sleepErr == nil {
+		for _, rec := range sleepFile.Records {
+			if rec.Date != todayKey {
+				continue
+			}
+			snap.HasTodaySleep = true
+			snap.TodaySleepBedtime = strings.TrimSpace(rec.Bedtime)
+			snap.TodaySleepWakeTime = strings.TrimSpace(rec.WakeTime)
+			snap.TodaySleepMinutes = rec.DurationMinutes
+			snap.TodaySleepScore = rec.Score
+			if snap.TodaySleepMinutes <= 0 && snap.TodaySleepBedtime != "" && snap.TodaySleepWakeTime != "" {
+				if bt, err := parseClockInDate(rec.Date, snap.TodaySleepBedtime, d.tz); err == nil {
+					if wt, err2 := parseClockInDate(rec.Date, snap.TodaySleepWakeTime, d.tz); err2 == nil {
+						if wt.Before(bt) {
+							bt = bt.Add(-24 * time.Hour)
+						}
+						snap.TodaySleepMinutes = int(math.Round(wt.Sub(bt).Minutes()))
+					}
+				}
+			}
+			if snap.TodaySleepBedtime != "" {
+				if bt, err := parseClockInDate(rec.Date, snap.TodaySleepBedtime, d.tz); err == nil {
+					if bt.Hour() >= 1 && bt.Hour() < 6 {
+						snap.LateBedtime = true
+					}
+				}
+			}
+			if snap.TodaySleepMinutes > 0 && snap.TodaySleepMinutes < 360 {
+				snap.LateBedtime = true
+			}
+			break
+		}
+	}
+
+	runs := d.loadRunningRecords(now)
+	if len(runs) > 0 {
+		todayMid := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, d.tz)
+		if latestDate, err := time.ParseInLocation("2006-01-02", runs[0].Date, d.tz); err == nil {
+			daysDiff := int(math.Round(todayMid.Sub(latestDate).Hours() / 24.0))
+			if daysDiff < 0 {
+				daysDiff = 0
+			}
+			snap.DaysSinceLastRun = daysDiff
+		}
+		if runs[0].Date == todayKey {
+			snap.RanToday = true
+			snap.TodayRunKm = runs[0].DistanceKm
+		}
+	}
+
+	snap.OverworkSignal = snap.LabActive && snap.LabActiveMinutes >= 180
+	snap.SlackingSignal = (now.Hour() >= 15 && now.Hour() <= 21) && !snap.LabActive && snap.TodayLabMinutes < 30
+	return snap
+}

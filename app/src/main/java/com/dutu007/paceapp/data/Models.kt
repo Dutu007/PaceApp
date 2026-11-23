@@ -318,3 +318,25 @@ data class NotificationPage(
     val unreadCount: Long = 0L,
     val latestId: Long = 0L,
 )
+
+data class ProactiveConfig(
+    val enabled: Boolean = true,
+    val intensity: String = "balanced",
+    val quietStart: String = "23:30",
+    val quietEnd: String = "08:30",
+    val labFocusProtect: Boolean = true,
+    val strictSupervision: Boolean = true,
+    val todayDate: String = "",
+    val todayBudget: Int = 0,
+    val todayMood: String = "",
+    val sentToday: Int = 0,
+    val lastSentAt: String = "",
+    val nextEvalAt: String = "",
+)
+
+data class ProactiveTriggerResult(
+    val sent: Boolean = false,
+    val reason: String = "",
+    val notification: PushNotificationItem? = null,
+    val state: ProactiveConfig? = null,
+)

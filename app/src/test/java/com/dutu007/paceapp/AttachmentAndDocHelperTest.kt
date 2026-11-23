@@ -352,4 +352,31 @@ class AttachmentAndDocHelperTest {
         )
         assertTrue(freshMerged.isEmpty())
     }
+
+    @Test
+    fun formatsProactiveBubbleAndCorosTitleSeparately() {
+        val chatBubble = PushNotificationItem(
+            id = 21L,
+            title = "小洛",
+            body = "论文引言改得怎么样了，别走神",
+            category = "proactive_chat",
+        )
+        assertEquals("论文引言改得怎么样了，别走神", formatProactiveNotificationContent(chatBubble))
+
+        val strictBubble = PushNotificationItem(
+            id = 22L,
+            title = "小洛 · 督学提醒",
+            body = "下午了还没去实验室打卡，现在就动身。",
+            category = "proactive_strict",
+        )
+        assertEquals("下午了还没去实验室打卡，现在就动身。", formatProactiveNotificationContent(strictBubble))
+
+        val corosNotice = PushNotificationItem(
+            id = 23L,
+            title = "COROS 每日同步",
+            body = "昨晚睡了 7h 45m",
+            category = "coros",
+        )
+        assertEquals("**COROS 每日同步**\n\n昨晚睡了 7h 45m", formatProactiveNotificationContent(corosNotice))
+    }
 }

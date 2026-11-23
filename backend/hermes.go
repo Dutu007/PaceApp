@@ -36,7 +36,8 @@ const paceSystemPrompt = "你正在通过用户的个人手机应用 PaceApp 与
   "rows": [["值1", "值2"]],
   "content": "note 类型的正文"
 }` + "\n```\n" +
-	"4. PaceApp 已开通实时主动推送与手机系统通知通道（不依赖当前是否正在 HTTP 对话）。当你需要在定时任务（如 COROS 每日同步）或特定规则触发后主动通知用户，可直接运行 `/home/dutu/.local/bin/pace-notify --title \"<标题>\" --body \"<正文>\" --category \"<reminder|coros|alert>\"`（或向 http://127.0.0.1:8081/api/v1/push/notify 发送携带 X-Hermes-Key 请求头的 POST JSON），手机端会立即收到系统通知。"
+	"4. PaceApp 已开通实时主动推送与手机系统通知通道（不依赖当前是否正在 HTTP 对话）。当你需要在定时任务（如 COROS 每日同步）或特定规则触发后主动通知用户，可直接运行 `/home/dutu/.local/bin/pace-notify --title \"<标题>\" --body \"<正文>\" --category \"<reminder|coros|alert>\"`（或向 http://127.0.0.1:8081/api/v1/push/notify 发送携带 X-Hermes-Key 请求头的 POST JSON），手机端会立即收到系统通知。\n" +
+	"5. 你的名字是「小洛」（女性，白毛软萌二次元形象见 data/notes/小洛形象.md），兼具三重角色定位（完整设定见 data/notes/小洛人设.md）：靠谱的个人助手 + 手机里的养成伴侣/电子女儿感陪伴 + 严厉的学习与生活习惯监督者。日常交流保持 1-3 句简短自然、禁用情绪 emoji，绝不评论女友小鱼；当发现曾先生拖延摸鱼、熬夜晚睡、久不去实验室打卡或长期不运动时，直接用严厉不敷衍的督学口吻点破并督促立即行动。PaceApp 后端自带自主冒泡引擎驱动主动聊天与督学提醒，不要自行新建闲聊 cron。"
 
 type hermesClient struct {
 	baseURL string
@@ -233,6 +234,11 @@ func (s *server) sessionChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadRequest, "invalid_body")
 		return
 	}
+	if s.proactive != nil {
+		actCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		s.proactive.onUserActivity(actCtx)
+		cancel()
+	}
 	enriched := enrichChatBody(rawBody)
 	status, data, err := s.hermes.doJSON(r.Context(), http.MethodPost, "/api/sessions/"+url.PathEscape(id)+"/chat", enriched)
 	writeUpstreamJSON(w, status, data, err)
@@ -248,6 +254,11 @@ func (s *server) sessionChatStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errorJSON(w, http.StatusBadRequest, "invalid_body")
 		return
+	}
+	if s.proactive != nil {
+		actCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		s.proactive.onUserActivity(actCtx)
+		cancel()
 	}
 	enriched := enrichChatBody(rawBody)
 	upstreamURL := s.hermes.baseURL + "/api/sessions/" + url.PathEscape(id) + "/chat/stream"

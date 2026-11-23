@@ -36,6 +36,7 @@ type server struct {
 	entries       entryStore
 	notifications notificationStore
 	notifHub      *notificationHub
+	proactive     *proactiveEngine
 	docs          *docStore
 	apkDir        string
 }
@@ -263,6 +264,7 @@ func main() {
 
 	var entries entryStore
 	var notifications notificationStore
+	var proactiveStoreRef proactiveStore
 	dsn := buildDSN()
 	if dsn != "" {
 		pool, err := pgxpool.New(ctx, dsn)
@@ -278,6 +280,7 @@ func main() {
 		}
 		entries = &poolStore{pool: pool}
 		notifications = &pgNotificationStore{pool: pool}
+		proactiveStoreRef = &pgProactiveStore{pool: pool}
 	} else {
 		log.Printf("WARNING: DATABASE_* not set; entries & notifications endpoints will return 503")
 	}
@@ -297,6 +300,12 @@ func main() {
 		notifHub:      newNotificationHub(),
 		docs:          newDocStore(os.Getenv("ASSISTANT_DATA_DIR"), os.Getenv("HERMES_MEMORY_FILE")),
 		apkDir:        apkDir,
+	}
+	if proactiveStoreRef != nil && notifications != nil {
+		s.proactive = newProactiveEngine(s, proactiveStoreRef)
+		loopCtx, cancelLoop := context.WithCancel(ctx)
+		defer cancelLoop()
+		go s.proactive.Start(loopCtx)
 	}
 
 	addr := os.Getenv("LISTEN_ADDR")
@@ -448,6 +457,10 @@ func (s *server) routes() http.Handler {
 	mux.Handle("POST /api/v1/notifications/{id}/read", s.authMiddleware(http.HandlerFunc(s.markNotificationRead)))
 	mux.Handle("POST /api/v1/notifications/read-all", s.authMiddleware(http.HandlerFunc(s.markAllNotificationsRead)))
 	mux.Handle("GET /api/v1/events/stream", s.authMiddleware(http.HandlerFunc(s.eventsStream)))
+
+	mux.Handle("GET /api/v1/proactive/config", s.authMiddleware(http.HandlerFunc(s.getProactiveConfig)))
+	mux.Handle("PATCH /api/v1/proactive/config", s.authMiddleware(http.HandlerFunc(s.updateProactiveConfig)))
+	mux.Handle("POST /api/v1/proactive/trigger", s.authMiddleware(http.HandlerFunc(s.triggerProactiveCheck)))
 
 	mux.Handle("GET /api/v1/app/latest", s.authMiddleware(http.HandlerFunc(s.latestApp)))
 	mux.Handle("GET /api/v1/app/apk", s.authMiddleware(http.HandlerFunc(s.appAPK)))
