@@ -227,6 +227,7 @@ data class PaceUiState(
     val analyticsLoading: Boolean = false,
     val analyticsRange: String = "7d",
     val analyticsBusy: Boolean = false,
+    val corosSyncing: Boolean = false,
 
     // Proactive push notifications & live connection state
     val notifications: List<PushNotificationItem> = emptyList(),
@@ -1523,6 +1524,39 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun syncCorosNow() {
+        if (_uiState.value.corosSyncing) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(corosSyncing = true) }
+            try {
+                val res = repository.syncCorosNow()
+                val refreshed = repository.getAnalytics(_uiState.value.analyticsRange)
+                _uiState.update { it.copy(corosSyncing = false, analytics = refreshed) }
+                WidgetSyncManager.onDashboardLoadedInApp(getApplication(), refreshed)
+                val changes = buildList {
+                    if (res.sleepAdded > 0 || res.sleepUpdated > 0) {
+                        add("睡眠 +${res.sleepAdded}/更${res.sleepUpdated}")
+                    }
+                    if (res.runningAdded > 0 || res.runningUpdated > 0) {
+                        add("跑步 +${res.runningAdded}/更${res.runningUpdated}")
+                    }
+                    if (res.cyclingAdded > 0 || res.cyclingUpdated > 0) {
+                        add("骑行 +${res.cyclingAdded}/更${res.cyclingUpdated}")
+                    }
+                }
+                val summary = if (changes.isNotEmpty()) {
+                    "高驰已直连同步（0 Token）：${changes.joinToString(" · ")}"
+                } else {
+                    "高驰已是最新数据（0 Token · 睡眠 ${res.sleepSynced} 晚 / 跑步 ${res.runningSynced} 次）"
+                }
+                showNotice(summary)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(corosSyncing = false) }
+                if (!handleAuthError(e)) showNotice(e.toDisplayMessage(), isError = true)
+            }
+        }
+    }
+
     // -- Docs --
 
     fun refreshDocs() {
@@ -1704,6 +1738,8 @@ class PaceViewModel(application: Application) : AndroidViewModel(application) {
                 "invalid_credentials" -> "账号或密码错误"
                 "unauthorized" -> "登录状态已失效，请重新登录"
                 "hermes_unreachable" -> "无法连接到服务器上的小洛服务，请检查 hermes-gateway 状态"
+                "coros_auth_expired" -> "高驰手表授权已过期，请在对话里让小洛重新生成登录链接"
+                "coros_sync_unavailable" -> "服务器尚未挂载高驰令牌目录，请联系维护者检查配置"
                 "release_not_found" -> "服务器还没有发布安装包"
                 else -> "请求失败 ($code)"
             }

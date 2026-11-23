@@ -443,6 +443,29 @@ private data class SleepUpsertRequestDto(
     val note: String = "",
 )
 
+@Serializable
+private data class CorosSyncRequestDto(
+    @SerialName("sleep_days") val sleepDays: Int = 7,
+    @SerialName("sport_days") val sportDays: Int = 14,
+)
+
+@Serializable
+private data class CorosSyncResultDto(
+    val ok: Boolean = false,
+    @SerialName("sleep_synced") val sleepSynced: Int = 0,
+    @SerialName("sleep_added") val sleepAdded: Int = 0,
+    @SerialName("sleep_updated") val sleepUpdated: Int = 0,
+    @SerialName("running_synced") val runningSynced: Int = 0,
+    @SerialName("running_added") val runningAdded: Int = 0,
+    @SerialName("running_updated") val runningUpdated: Int = 0,
+    @SerialName("cycling_synced") val cyclingSynced: Int = 0,
+    @SerialName("cycling_added") val cyclingAdded: Int = 0,
+    @SerialName("cycling_updated") val cyclingUpdated: Int = 0,
+    @SerialName("latest_sleep_date") val latestSleepDate: String = "",
+    @SerialName("latest_running_date") val latestRunningDate: String = "",
+    @SerialName("synced_at") val syncedAt: String = "",
+)
+
 class PaceRepository(context: Context) {
     private val preferences = context.getSharedPreferences("paceapp_session", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
@@ -1055,6 +1078,28 @@ class PaceRepository(context: Context) {
             auth()
             jsonBody(SleepUpsertRequestDto(date, bedtime, wakeTime, durationMinutes, score, "manual", note))
         }.check()
+    }
+
+    suspend fun syncCorosNow(sleepDays: Int = 7, sportDays: Int = 14): CorosSyncResult {
+        val dto = client.post("$baseUrl/api/v1/analytics/sync-coros") {
+            auth()
+            jsonBody(CorosSyncRequestDto(sleepDays = sleepDays, sportDays = sportDays))
+        }.bodyChecked<CorosSyncResultDto>()
+        return CorosSyncResult(
+            ok = dto.ok,
+            sleepSynced = dto.sleepSynced,
+            sleepAdded = dto.sleepAdded,
+            sleepUpdated = dto.sleepUpdated,
+            runningSynced = dto.runningSynced,
+            runningAdded = dto.runningAdded,
+            runningUpdated = dto.runningUpdated,
+            cyclingSynced = dto.cyclingSynced,
+            cyclingAdded = dto.cyclingAdded,
+            cyclingUpdated = dto.cyclingUpdated,
+            latestSleepDate = dto.latestSleepDate,
+            latestRunningDate = dto.latestRunningDate,
+            syncedAt = dto.syncedAt,
+        )
     }
 
     suspend fun listNotifications(

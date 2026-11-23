@@ -196,7 +196,7 @@ object PaceWidgetUpdater {
                 points = chartPoints,
                 accentColor = 0xFF0E5A6F.toInt(),
                 emptyLabel = "近 7 天暂无实验室打卡",
-                valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                valueLabelFormatter = { formatCompactDuration(it.toInt()) },
             ),
         )
 
@@ -603,7 +603,7 @@ object PaceWidgetUpdater {
                 points = WidgetDataStore.toDailyPoints(snapshot.labDailySeries),
                 accentColor = 0xFF0E5A6F.toInt(),
                 emptyLabel = "近 7 天暂无实验室打卡",
-                valueLabelFormatter = { formatDurationMinutes(it.toInt()) },
+                valueLabelFormatter = { formatCompactDuration(it.toInt()) },
                 heightDp = 56f,
                 maxDensityScale = 1.9f,
             ),

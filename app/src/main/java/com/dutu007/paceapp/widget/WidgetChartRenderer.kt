@@ -97,12 +97,18 @@ object WidgetChartRenderer {
             if (idx >= 0) idx else recent.lastIndex
         }
 
-        val softAccent = (accentColor and 0x00FFFFFF) or (0x6B shl 24)
+        val softAccent = (accentColor and 0x00FFFFFF) or (0x99 shl 24)
         val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val activeValuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = accentColor
-            textSize = 9.5f * scale
+            textSize = 9f * scale
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+        val dimValuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF3A5260.toInt()
+            textSize = 8.2f * scale
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
             textAlign = Paint.Align.CENTER
         }
         val dayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -129,12 +135,12 @@ object WidgetChartRenderer {
             }
             canvas.drawRoundRect(RectF(left, top, right, chartBottom), barRadius, barRadius, barPaint)
 
-            if (idx == highlightIdx && pt.value > 0.0) {
+            if (pt.value > 0.0) {
                 canvas.drawText(
                     valueLabelFormatter(pt.value),
                     centerX,
-                    (top - 4f * scale).coerceAtLeast(10f * scale),
-                    valuePaint,
+                    (top - 3.5f * scale).coerceAtLeast(9f * scale),
+                    if (idx == highlightIdx) activeValuePaint else dimValuePaint,
                 )
             }
 

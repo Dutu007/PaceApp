@@ -13,6 +13,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.runtime.LaunchedEffect
 import com.dutu007.paceapp.push.PaceNotificationHelper
 import com.dutu007.paceapp.push.PushConnectionState
+import com.dutu007.paceapp.ui.theme.PacePalette
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -293,6 +294,7 @@ fun SettingsScreen(
     var ignoringBattery by remember { mutableStateOf(OriginOsKeepAliveHelper.isIgnoringBatteryOptimizations(context)) }
     var lastWidgetSync by remember(state.analytics) { mutableStateOf(WidgetDataStore.lastSyncFormatted(context)) }
     var hasNotifPermission by remember { mutableStateOf(PaceNotificationHelper.hasNotificationPermission(context)) }
+    var serviceChannelHidden by remember { mutableStateOf(PaceNotificationHelper.isServiceChannelHidden(context)) }
     val notifPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -310,6 +312,7 @@ fun SettingsScreen(
                 ignoringBattery = OriginOsKeepAliveHelper.isIgnoringBatteryOptimizations(context)
                 lastWidgetSync = WidgetDataStore.lastSyncFormatted(context)
                 hasNotifPermission = PaceNotificationHelper.hasNotificationPermission(context)
+                serviceChannelHidden = PaceNotificationHelper.isServiceChannelHidden(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -489,6 +492,39 @@ fun SettingsScreen(
                                 Switch(
                                     checked = state.livePushEnabled,
                                     onCheckedChange = viewModel::toggleLivePush,
+                                )
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { PaceNotificationHelper.openServiceChannelSettings(context) }
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = "隐藏通知栏常驻条",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = "仅关闭“小洛实时连接状态”分类即可彻底隐藏常驻通知，不影响后台保活与小洛消息提醒",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Text(
+                                    text = if (serviceChannelHidden) "已隐藏" else "去隐藏",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (serviceChannelHidden) PacePalette.Success else MaterialTheme.colorScheme.primary,
                                 )
                             }
                             HorizontalDivider(

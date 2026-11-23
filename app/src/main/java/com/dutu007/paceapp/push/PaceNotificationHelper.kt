@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
+import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -56,6 +58,31 @@ object PaceNotificationHelper {
         }
     }
 
+    fun isServiceChannelHidden(context: Context): Boolean {
+        ensureChannels(context)
+        val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
+        val ch = mgr.getNotificationChannel(CHANNEL_SERVICE) ?: return false
+        return ch.importance == NotificationManager.IMPORTANCE_NONE
+    }
+
+    fun openServiceChannelSettings(context: Context) {
+        ensureChannels(context)
+        val channelIntent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            putExtra(Settings.EXTRA_CHANNEL_ID, CHANNEL_SERVICE)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(channelIntent) }.onFailure {
+            val fallback = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null),
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(fallback) }
+        }
+    }
+
     fun buildServiceNotification(context: Context, state: PushConnectionState): Notification {
         ensureChannels(context)
         val openIntent = Intent(context, MainActivity::class.java).apply {
@@ -67,11 +94,10 @@ object PaceNotificationHelper {
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val (title, body) = when (state) {
-            PushConnectionState.CONNECTED -> "小洛实时在线" to "可随时接收主动提醒"
-            PushConnectionState.CONNECTING -> "正在连接小洛" to "等待建立推送通道..."
-            PushConnectionState.DISCONNECTED -> "小洛连接暂断" to "网络恢复后自动重连"
-            PushConnectionState.DISABLED -> "小洛实时连接已关闭" to ""
+        val (title, body) = if (state == PushConnectionState.DISABLED) {
+            "小洛实时连接已关闭" to ""
+        } else {
+            "小洛后台通道" to "静默保活中（可在设置一键隐藏此常驻条）"
         }
         return NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setSmallIcon(R.drawable.ic_pace_notif)
@@ -83,6 +109,7 @@ object PaceNotificationHelper {
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
             .setContentIntent(pi)
             .build()
     }

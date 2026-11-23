@@ -1,6 +1,5 @@
 package com.dutu007.paceapp.push
 
-import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -86,6 +85,8 @@ class PacePushService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        serviceRunning = true
+        activeInstance = this
         PaceNotificationHelper.ensureChannels(this)
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         connectivityManager = cm
@@ -105,12 +106,13 @@ class PacePushService : Service() {
         val enabled = PacePushPrefs.isLiveEnabled(this)
         val hasSession = repo.hasSession()
 
-        val initialState = if (enabled && hasSession) {
-            PushConnectionState.CONNECTING
-        } else if (!enabled) {
-            PushConnectionState.DISABLED
-        } else {
-            PushConnectionState.DISCONNECTED
+        val alreadyConnected = streamJob?.isActive == true &&
+            PacePushPrefs.connectionState.value == PushConnectionState.CONNECTED
+        val initialState = when {
+            !enabled -> PushConnectionState.DISABLED
+            !hasSession -> PushConnectionState.DISCONNECTED
+            alreadyConnected -> PushConnectionState.CONNECTED
+            else -> PushConnectionState.CONNECTING
         }
         promoteForeground(initialState)
 
@@ -122,13 +124,17 @@ class PacePushService : Service() {
 
         if (streamJob?.isActive != true) {
             streamJob = serviceScope.launch { runEventLoop() }
-        } else {
+        } else if (!alreadyConnected) {
             networkWakeSignal.trySend(Unit)
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
+        serviceRunning = false
         networkCallback?.let { cb -> runCatching { connectivityManager?.unregisterNetworkCallback(cb) } }
         networkCallback = null
         streamJob?.cancel()
@@ -139,6 +145,18 @@ class PacePushService : Service() {
         super.onDestroy()
     }
 
+    private fun wakeIfDisconnected() {
+        if (streamJob?.isActive != true) {
+            val enabled = PacePushPrefs.isLiveEnabled(this)
+            val hasSession = PaceRepository(this).hasSession()
+            if (enabled && hasSession) {
+                streamJob = serviceScope.launch { runEventLoop() }
+            }
+        } else if (PacePushPrefs.connectionState.value != PushConnectionState.CONNECTED) {
+            networkWakeSignal.trySend(Unit)
+        }
+    }
+
     private fun promoteForeground(state: PushConnectionState) {
         val notif = PaceNotificationHelper.buildServiceNotification(this, state)
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -147,17 +165,6 @@ class PacePushService : Service() {
             0
         }
         ServiceCompat.startForeground(this, PaceNotificationHelper.SERVICE_NOTIFICATION_ID, notif, fgsType)
-    }
-
-    private fun updateServiceBanner(state: PushConnectionState) {
-        PacePushPrefs.setConnectionState(state)
-        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        runCatching {
-            mgr.notify(
-                PaceNotificationHelper.SERVICE_NOTIFICATION_ID,
-                PaceNotificationHelper.buildServiceNotification(this, state),
-            )
-        }
     }
 
     private fun stopSelfCleanly() {
@@ -178,7 +185,7 @@ class PacePushService : Service() {
                 return
             }
 
-            updateServiceBanner(PushConnectionState.CONNECTING)
+            PacePushPrefs.setConnectionState(PushConnectionState.CONNECTING)
             var conn: HttpURLConnection? = null
             var shouldStop = false
             try {
@@ -187,7 +194,7 @@ class PacePushService : Service() {
                 conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = 15_000
-                    readTimeout = 45_000
+                    readTimeout = 75_000
                     doInput = true
                     setRequestProperty("Authorization", "Bearer $token")
                     setRequestProperty("Accept", "text/event-stream")
@@ -235,7 +242,7 @@ class PacePushService : Service() {
                 return
             }
 
-            updateServiceBanner(PushConnectionState.DISCONNECTED)
+            PacePushPrefs.setConnectionState(PushConnectionState.DISCONNECTED)
             val waitMs = backoffsMs[attempt.coerceAtMost(backoffsMs.lastIndex)]
             attempt++
             while (networkWakeSignal.tryReceive().isSuccess) {
@@ -255,7 +262,7 @@ class PacePushService : Service() {
     private fun handleFrame(eventName: String, rawData: String) {
         when (eventName) {
             "connected" -> {
-                updateServiceBanner(PushConnectionState.CONNECTED)
+                PacePushPrefs.setConnectionState(PushConnectionState.CONNECTED)
                 val latestId = parseConnectedLatestId(rawData) ?: 0L
                 if (PacePushPrefs.lastSeenId(this) == 0L && latestId > 0L) {
                     PacePushPrefs.updateLastSeenId(this, latestId)
@@ -271,13 +278,23 @@ class PacePushService : Service() {
     }
 
     companion object {
+        @Volatile
+        private var serviceRunning = false
+
+        @Volatile
+        private var activeInstance: PacePushService? = null
+
         fun syncServiceState(context: Context) {
             val appCtx = context.applicationContext
             val hasSession = PaceRepository(appCtx).hasSession()
             val enabled = PacePushPrefs.isLiveEnabled(appCtx)
             if (hasSession && enabled) {
-                runCatching {
-                    ContextCompat.startForegroundService(appCtx, Intent(appCtx, PacePushService::class.java))
+                if (serviceRunning) {
+                    activeInstance?.wakeIfDisconnected()
+                } else {
+                    runCatching {
+                        ContextCompat.startForegroundService(appCtx, Intent(appCtx, PacePushService::class.java))
+                    }
                 }
             } else {
                 if (!enabled) {

@@ -1263,3 +1263,186 @@ func TestProactiveConfigAndManualTrigger(t *testing.T) {
 		t.Fatalf("expected SSE broadcast to contain proactive_strict notification, got %s", evData)
 	}
 }
+
+func TestCorosParsersAndManualSync(t *testing.T) {
+	sleepSample := "\"Sleep Overview\\n========================\\nNote: each record below is dated by its wake-up day.\\n\\n2026-11-22\\nSleep Score: 92\\nDaily Sleep: 7h 48min (incl. naps)\\nMain Sleep (asleep): 7h 21min\\nMain Sleep Period (incl. awake): 7h 25min\\nDeep Sleep Ratio: 21%\\nLight Sleep Ratio: 45%\\nREM Ratio: 33%\\nAwake Time: 4 min\\nMain Sleep Window: 2026-11-22 01:46 - 2026-11-22 09:11\\nNaps Total (asleep): 27 min\\n\\n2026-11-23\\nSleep Score: 90\\nMain Sleep (asleep): 5h 45min\\nDeep Sleep Ratio: 18%\\nLight Sleep Ratio: 64%\\nREM Ratio: 13%\\nAwake Time: 18 min\\nMain Sleep Window: 2026-11-23 01:06 - 2026-11-23 07:09\\nNaps Total (asleep): 1h 24min\\n\\n2026-11-24\\nSleep Score: 0\\nSleep detail for this day is not available yet\""
+	parsedSleep := parseCorosSleepOverview(unwrapCorosContentText(sleepSample))
+	if len(parsedSleep) != 2 {
+		t.Fatalf("expected 2 valid sleep nights, got %d (%+v)", len(parsedSleep), parsedSleep)
+	}
+	if parsedSleep[1].Date != "2026-11-23" || parsedSleep[1].DurationMinutes != 345 || parsedSleep[1].Note != "午睡 84 分钟" || *parsedSleep[1].Score != 90 {
+		t.Fatalf("unexpected 2026-11-23 parsed sleep: %+v", parsedSleep[1])
+	}
+
+	sportSample := `Sport Records — 2026-11-10 to 2026-11-23 (2 records)
+========================
+
+1. Cycling — 2026-11-22
+   Duration: 1:48:44 | Distance: 28.85 km
+   Average Speed: 15.9 km/h | Avg HR: 117 bpm | Calories: 658 kcal
+   LabelId: 481933802826924734 | SportType: 200
+
+2. Outdoor Run — 2026-11-20
+   Duration: 33:36 | Distance: 3.68 km
+   Average Pace: 9:07 /km | Avg HR: 126 bpm | Calories: 300 kcal
+   LabelId: 481885941590425701 | SportType: 100`
+	runs, rides := parseCorosSportRecords(sportSample)
+	if len(runs) != 1 || runs[0].Pace != "9'07\"/km" || runs[0].DurationMinutes != 34 {
+		t.Fatalf("unexpected parsed runs: %+v", runs)
+	}
+	if len(rides) != 1 || rides[0].DistanceKm != 28.85 || rides[0].SpeedKmh != 15.9 || rides[0].DurationMinutes != 109 {
+		t.Fatalf("unexpected parsed rides: %+v", rides)
+	}
+
+	// Setup mock COROS OAuth + Streamable-HTTP MCP server
+	var refreshCalls int
+	corosUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth2/token" {
+			refreshCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  "fresh-coros-token",
+				"refresh_token": "fresh-coros-refresh",
+				"expires_in":    7200,
+				"token_type":    "Bearer",
+			})
+			return
+		}
+		if r.URL.Path == "/mcp" {
+			if r.Header.Get("Authorization") != "Bearer fresh-coros-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			var rpc struct {
+				ID     int            `json:"id"`
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&rpc)
+			if rpc.Method == "initialize" {
+				w.Header().Set("Mcp-Session-Id", "sess-123")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      rpc.ID,
+					"result":  map[string]any{"protocolVersion": "2025-06-18"},
+				})
+				return
+			}
+			if rpc.Method == "tools/call" {
+				toolName, _ := rpc.Params["name"].(string)
+				if toolName == "querySleepOverview" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					respObj, _ := json.Marshal(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      rpc.ID,
+						"result": map[string]any{
+							"isError": false,
+							"content": []map[string]any{{"type": "text", "text": sleepSample}},
+						},
+					})
+					_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", respObj)
+					return
+				}
+				if toolName == "querySportRecords" {
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      rpc.ID,
+						"result": map[string]any{
+							"isError": false,
+							"content": []map[string]any{{"type": "text", "text": sportSample}},
+						},
+					})
+					return
+				}
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer corosUpstream.Close()
+
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mcpDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(mcpDir, "cn"), 0o700)
+	_ = writeJSONAtomicPrivate(filepath.Join(mcpDir, "cn", "token.json"), corosTokenSet{
+		AccessToken:    "expired-token",
+		RefreshToken:   "old-refresh",
+		ExpiresAtEpoch: 1000,
+		TokenType:      "Bearer",
+		ClientID:       "cid",
+	})
+	srv.coros = &corosClient{
+		mcpDir:         mcpDir,
+		overrideIssuer: corosUpstream.URL,
+		http:           &http.Client{Timeout: 5 * time.Second},
+		nowFn:          func() time.Time { return time.Date(2026, 11, 23, 14, 0, 0, 0, time.FixedZone("CST", 8*3600)) },
+	}
+
+	// Pre-seed handwritten running & sleep files to verify non-destructive preservation
+	_ = writeJSONAtomic(filepath.Join(srv.docs.assistantDir, "sleep", "records.json"), sleepFileJSON{
+		Note: defaultSleepNote,
+		Records: []sleepRecordItem{
+			{Date: "2026-11-22", Bedtime: "2026-11-22 01:46", WakeTime: "2026-11-22 09:11", DurationMinutes: 441, Note: "昨晚有点吵", Source: "coros"},
+		},
+	})
+	_ = writeJSONAtomic(filepath.Join(srv.docs.assistantDir, "running", "records.json"), map[string]any{
+		"note": defaultRunningFileNote,
+		"records": []map[string]any{
+			{
+				"date":             "2026-11-20",
+				"distance_km":      3.68,
+				"duration_minutes": 34,
+				"pace":             "9'07\"/km",
+				"source":           "coros",
+				"note":             "平均心率 126 bpm · 300 kcal",
+				"image_path":       "images/running/跑步_11-20.jpg",
+				"memo":             "天气很舒服",
+			},
+		},
+	})
+
+	api := httptest.NewServer(srv.routes())
+	defer api.Close()
+	token, _, _ := srv.auth.issueToken(time.Now())
+
+	req, _ := http.NewRequest(http.MethodPost, api.URL+"/api/v1/analytics/sync-coros", strings.NewReader(`{"sleep_days":7,"sport_days":14}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on sync-coros, got %d", resp.StatusCode)
+	}
+	var syncRes corosSyncResult
+	if err := json.NewDecoder(resp.Body).Decode(&syncRes); err != nil {
+		t.Fatal(err)
+	}
+	if !syncRes.OK || syncRes.SleepSynced != 2 || syncRes.SleepAdded != 1 || syncRes.RunningSynced != 1 || syncRes.CyclingSynced != 1 || syncRes.CyclingAdded != 1 {
+		t.Fatalf("unexpected sync result: %+v", syncRes)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("expected 1 oauth refresh call, got %d", refreshCalls)
+	}
+
+	// Verify handwritten sleep note & running image_path + memo survived intact
+	rawSleep, _ := os.ReadFile(filepath.Join(srv.docs.assistantDir, "sleep", "records.json"))
+	if !strings.Contains(string(rawSleep), "昨晚有点吵") || !strings.Contains(string(rawSleep), "午睡 84 分钟") {
+		t.Fatalf("sleep records merge unexpected: %s", string(rawSleep))
+	}
+	rawRun, _ := os.ReadFile(filepath.Join(srv.docs.assistantDir, "running", "records.json"))
+	if !strings.Contains(string(rawRun), "images/running/跑步_11-20.jpg") || !strings.Contains(string(rawRun), "天气很舒服") {
+		t.Fatalf("running image/memo should be preserved: %s", string(rawRun))
+	}
+	rawCycle, _ := os.ReadFile(filepath.Join(srv.docs.assistantDir, "metrics", "cycling.json"))
+	if !strings.Contains(string(rawCycle), "28.85") {
+		t.Fatalf("cycling record missing: %s", string(rawCycle))
+	}
+	// Verify zero notifications created (no token / no report spam)
+	items, _, _ := srv.notifications.List(context.Background(), 10, false, 0)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 notifications from 0-token sync, got %d", len(items))
+	}
+}

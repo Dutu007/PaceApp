@@ -37,6 +37,7 @@ type server struct {
 	notifications notificationStore
 	notifHub      *notificationHub
 	proactive     *proactiveEngine
+	coros         *corosClient
 	docs          *docStore
 	apkDir        string
 }
@@ -298,6 +299,7 @@ func main() {
 		entries:       entries,
 		notifications: notifications,
 		notifHub:      newNotificationHub(),
+		coros:         newCorosClientFromEnv(),
 		docs:          newDocStore(os.Getenv("ASSISTANT_DATA_DIR"), os.Getenv("HERMES_MEMORY_FILE")),
 		apkDir:        apkDir,
 	}
@@ -450,6 +452,7 @@ func (s *server) routes() http.Handler {
 	mux.Handle("POST /api/v1/analytics/lab/sessions", s.authMiddleware(http.HandlerFunc(s.addLabSession)))
 	mux.Handle("DELETE /api/v1/analytics/lab/sessions", s.authMiddleware(http.HandlerFunc(s.deleteLabSession)))
 	mux.Handle("POST /api/v1/analytics/sleep", s.authMiddleware(http.HandlerFunc(s.upsertSleepRecord)))
+	mux.Handle("POST /api/v1/analytics/sync-coros", s.authMiddleware(http.HandlerFunc(s.syncCorosAnalytics)))
 
 	mux.Handle("POST /api/v1/push/notify", s.authMiddleware(http.HandlerFunc(s.pushNotify)))
 	mux.Handle("POST /api/v1/push/test", s.authMiddleware(http.HandlerFunc(s.pushTest)))

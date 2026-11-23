@@ -196,8 +196,22 @@ fun AnalyticsScreen(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                         )
                     }
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (state.corosSyncing) PacePalette.Muted else PacePalette.PrimarySoft,
+                        border = BorderStroke(1.dp, PacePalette.Primary.copy(alpha = 0.28f)),
+                        onClick = { if (!state.corosSyncing) viewModel.syncCorosNow() },
+                    ) {
+                        Text(
+                            text = if (state.corosSyncing) "同步中..." else "同步手表",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = PacePalette.Primary,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        )
+                    }
                 }
-                if (state.analyticsLoading && dashboard != null) {
+                if ((state.analyticsLoading && dashboard != null) || state.corosSyncing) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
                 }
             }
@@ -260,6 +274,8 @@ fun AnalyticsScreen(
             item {
                 SleepAnalyticsCard(
                     sleep = dashboard.sleep,
+                    syncing = state.corosSyncing,
+                    onSyncCoros = { viewModel.syncCorosNow() },
                     onAddSleep = { showSleepSheet = true },
                     onOpenSpec = { showSpecDialog = true },
                 )
@@ -268,6 +284,8 @@ fun AnalyticsScreen(
             item {
                 RunningAnalyticsCard(
                     running = dashboard.running,
+                    syncing = state.corosSyncing,
+                    onSyncCoros = { viewModel.syncCorosNow() },
                     onOpenImage = { path ->
                         previewTarget = InAppPreviewTarget.ServerDoc(
                             title = path.substringAfterLast('/'),
@@ -618,6 +636,8 @@ private fun LabAnalyticsCard(
                 barColor = PacePalette.Primary,
                 valueFormatter = { v -> formatDurationMinutes(v.toInt()) },
                 emptyHint = "暂无实验室打卡记录",
+                showAllBarLabels = true,
+                compactValueFormatter = { v -> formatCompactDuration(v.toInt()) },
             )
 
             if (lab.recentSessions.isNotEmpty()) {
@@ -692,6 +712,8 @@ private fun LabAnalyticsCard(
 @Composable
 private fun SleepAnalyticsCard(
     sleep: SleepAnalytics,
+    syncing: Boolean,
+    onSyncCoros: () -> Unit,
     onAddSleep: () -> Unit,
     onOpenSpec: () -> Unit,
 ) {
@@ -724,8 +746,17 @@ private fun SleepAnalyticsCard(
                         )
                     }
                 }
-                TextButton(onClick = onAddSleep, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Text("+ 记一晚", fontSize = 12.sp, color = SleepAccent)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    TextButton(
+                        onClick = onSyncCoros,
+                        enabled = !syncing,
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text(if (syncing) "同步中..." else "同步手表", fontSize = 12.sp, color = PacePalette.Primary)
+                    }
+                    TextButton(onClick = onAddSleep, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                        Text("+ 记一晚", fontSize = 12.sp, color = SleepAccent)
+                    }
                 }
             }
 
@@ -1777,6 +1808,8 @@ private fun DrawScope.drawSleepScoreTrendLayer(
 @Composable
 private fun RunningAnalyticsCard(
     running: RunningAnalytics,
+    syncing: Boolean,
+    onSyncCoros: () -> Unit,
     onOpenImage: (String) -> Unit,
 ) {
     Surface(
@@ -1794,7 +1827,7 @@ private fun RunningAnalyticsCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text("跑步记录", style = MaterialTheme.typography.titleMedium, color = PacePalette.TextPrimary)
                     Text(
                         text = buildString {
@@ -1809,14 +1842,23 @@ private fun RunningAnalyticsCard(
                         color = PacePalette.TextSecondary,
                     )
                 }
-                Surface(shape = RoundedCornerShape(999.dp), color = RunningAccentSoft) {
-                    Text(
-                        "近阶段 ${running.runsInRange} 次",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = RunningAccent,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(
+                        onClick = onSyncCoros,
+                        enabled = !syncing,
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text(if (syncing) "同步中..." else "同步手表", fontSize = 12.sp, color = PacePalette.Primary)
+                    }
+                    Surface(shape = RoundedCornerShape(999.dp), color = RunningAccentSoft) {
+                        Text(
+                            "近阶段 ${running.runsInRange} 次",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = RunningAccent,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
                 }
             }
 
@@ -2013,6 +2055,8 @@ private fun DailyBarChart(
     barColor: Color,
     valueFormatter: (Double) -> String,
     emptyHint: String,
+    showAllBarLabels: Boolean = false,
+    compactValueFormatter: ((Double) -> String)? = null,
 ) {
     val hasAnyNonZero = points.any { it.value > 0.0 }
     if (points.isEmpty() || !hasAnyNonZero) {
@@ -2035,6 +2079,8 @@ private fun DailyBarChart(
     val safeIndex = selectedIndex.coerceIn(0, points.lastIndex)
     val selected = points[safeIndex]
     val maxValue = (points.maxOfOrNull { it.value } ?: 1.0).coerceAtLeast(1.0)
+    val showPerBarValues = showAllBarLabels && points.size <= 7
+    val textMeasurer = rememberTextMeasurer()
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -2047,12 +2093,19 @@ private fun DailyBarChart(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "${selected.date} (${selected.weekday})",
+                text = if (showPerBarValues) {
+                    "近 ${points.size} 天合计 ${valueFormatter(points.sumOf { it.value })}"
+                } else {
+                    "${selected.date} (${selected.weekday})"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = PacePalette.TextSecondary,
             )
             Text(
                 text = buildString {
+                    if (showPerBarValues) {
+                        append("${selected.label} ${selected.weekday} · ")
+                    }
                     append(valueFormatter(selected.value))
                     if (selected.count > 1) append(" · ${selected.count} 次")
                 },
@@ -2065,12 +2118,13 @@ private fun DailyBarChart(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(126.dp)
+                .height(if (showPerBarValues) 144.dp else 126.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(PacePalette.Background)
                 .padding(horizontal = 10.dp, vertical = 12.dp),
         ) {
             val gridColor = PacePalette.CardBorder
+            val secondaryTextColor = PacePalette.TextSecondary
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
@@ -2087,12 +2141,14 @@ private fun DailyBarChart(
             ) {
                 val w = size.width
                 val h = size.height
+                val topLabelSpace = if (showPerBarValues) 18.dp.toPx() else 0f
+                val plotH = (h - topLabelSpace).coerceAtLeast(24.dp.toPx())
                 val dash = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
 
                 drawLine(
                     color = gridColor,
-                    start = Offset(0f, h * 0.5f),
-                    end = Offset(w, h * 0.5f),
+                    start = Offset(0f, topLabelSpace + plotH * 0.5f),
+                    end = Offset(w, topLabelSpace + plotH * 0.5f),
                     strokeWidth = 1.dp.toPx(),
                     pathEffect = dash,
                 )
@@ -2106,16 +2162,18 @@ private fun DailyBarChart(
                 val slotW = w / points.size.toFloat()
                 val barW = (slotW * 0.58f).coerceIn(3.dp.toPx(), 24.dp.toPx())
                 val radius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                val inactiveAlpha = if (showPerBarValues) 0.65f else 0.42f
 
                 points.forEachIndexed { idx, pt ->
                     val ratio = (pt.value / maxValue).toFloat().coerceIn(0f, 1f)
-                    val barH = if (pt.value > 0.0) maxOf(6.dp.toPx(), h * ratio) else 2.dp.toPx()
-                    val left = idx * slotW + (slotW - barW) / 2f
+                    val barH = if (pt.value > 0.0) maxOf(6.dp.toPx(), plotH * ratio) else 2.dp.toPx()
+                    val centerX = idx * slotW + slotW / 2f
+                    val left = centerX - barW / 2f
                     val top = h - barH
                     val color = when {
                         pt.value <= 0.0 -> gridColor.copy(alpha = 0.65f)
                         idx == safeIndex -> barColor
-                        else -> barColor.copy(alpha = 0.42f)
+                        else -> barColor.copy(alpha = inactiveAlpha)
                     }
                     drawRoundRect(
                         color = color,
@@ -2123,34 +2181,95 @@ private fun DailyBarChart(
                         size = Size(barW, barH),
                         cornerRadius = radius,
                     )
+
+                    if (showPerBarValues) {
+                        val labelStr = if (pt.value > 0.0) {
+                            (compactValueFormatter ?: valueFormatter)(pt.value)
+                        } else {
+                            "0"
+                        }
+                        val labelStyle = TextStyle(
+                            fontSize = 9.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (idx == safeIndex) FontWeight.Bold else FontWeight.SemiBold,
+                            color = when {
+                                pt.value <= 0.0 -> secondaryTextColor.copy(alpha = 0.6f)
+                                idx == safeIndex -> barColor
+                                else -> secondaryTextColor
+                            },
+                        )
+                        val measured = textMeasurer.measure(
+                            text = labelStr,
+                            style = labelStyle,
+                            softWrap = false,
+                            maxLines = 1,
+                        )
+                        val textX = (centerX - measured.size.width / 2f)
+                            .coerceIn(0f, (w - measured.size.width).coerceAtLeast(0f))
+                        val textY = (top - measured.size.height - 3.dp.toPx()).coerceAtLeast(0f)
+                        drawText(measured, topLeft = Offset(textX, textY))
+                    }
                 }
             }
         }
 
-        val labelIndices = remember(points.size) {
-            when {
-                points.size <= 7 -> points.indices.toList()
-                else -> listOf(
-                    0,
-                    points.lastIndex / 4,
-                    points.lastIndex / 2,
-                    (points.lastIndex * 3) / 4,
-                    points.lastIndex,
-                ).distinct()
+        if (showPerBarValues) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                points.forEachIndexed { idx, pt ->
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = pt.weekday.ifBlank { pt.label },
+                            fontSize = 10.sp,
+                            color = if (idx == safeIndex) barColor else PacePalette.TextSecondary,
+                            fontWeight = if (idx == safeIndex) FontWeight.SemiBold else FontWeight.Normal,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                        if (pt.label.isNotBlank()) {
+                            Text(
+                                text = pt.label,
+                                fontSize = 8.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = if (idx == safeIndex) barColor.copy(alpha = 0.85f) else PacePalette.TextSecondary.copy(alpha = 0.72f),
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                    }
+                }
             }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            labelIndices.forEach { idx ->
-                val pt = points[idx]
-                Text(
-                    text = if (points.size <= 7) pt.weekday.ifBlank { pt.label } else pt.label,
-                    fontSize = 10.sp,
-                    color = if (idx == safeIndex) barColor else PacePalette.TextSecondary,
-                    fontWeight = if (idx == safeIndex) FontWeight.SemiBold else FontWeight.Normal,
-                )
+        } else {
+            val labelIndices = remember(points.size) {
+                when {
+                    points.size <= 7 -> points.indices.toList()
+                    else -> listOf(
+                        0,
+                        points.lastIndex / 4,
+                        points.lastIndex / 2,
+                        (points.lastIndex * 3) / 4,
+                        points.lastIndex,
+                    ).distinct()
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                labelIndices.forEach { idx ->
+                    val pt = points[idx]
+                    Text(
+                        text = if (points.size <= 7) pt.weekday.ifBlank { pt.label } else pt.label,
+                        fontSize = 10.sp,
+                        color = if (idx == safeIndex) barColor else PacePalette.TextSecondary,
+                        fontWeight = if (idx == safeIndex) FontWeight.SemiBold else FontWeight.Normal,
+                    )
+                }
             }
         }
     }

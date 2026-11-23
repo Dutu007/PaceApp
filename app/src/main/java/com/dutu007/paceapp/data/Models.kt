@@ -340,3 +340,19 @@ data class ProactiveTriggerResult(
     val notification: PushNotificationItem? = null,
     val state: ProactiveConfig? = null,
 )
+
+data class CorosSyncResult(
+    val ok: Boolean = false,
+    val sleepSynced: Int = 0,
+    val sleepAdded: Int = 0,
+    val sleepUpdated: Int = 0,
+    val runningSynced: Int = 0,
+    val runningAdded: Int = 0,
+    val runningUpdated: Int = 0,
+    val cyclingSynced: Int = 0,
+    val cyclingAdded: Int = 0,
+    val cyclingUpdated: Int = 0,
+    val latestSleepDate: String = "",
+    val latestRunningDate: String = "",
+    val syncedAt: String = "",
+)

@@ -379,4 +379,12 @@ class AttachmentAndDocHelperTest {
         )
         assertEquals("**COROS 每日同步**\n\n昨晚睡了 7h 45m", formatProactiveNotificationContent(corosNotice))
     }
+
+    @Test
+    fun formatsCompactDurationForSevenDayLabBars() {
+        assertEquals("--", formatCompactDuration(0))
+        assertEquals("45m", formatCompactDuration(45))
+        assertEquals("2h", formatCompactDuration(120))
+        assertEquals("5h05m", formatCompactDuration(305))
+    }
 }
